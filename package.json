@@ -2,6 +2,7 @@
   "name": "windows-cleaner",
   "version": "1.0.0",
   "private": true,
+  "license": "MIT",
   "author": "安索 <ansuo1557@qq.com>",
   "description": "Windows disk cleaner built with Electron and Next.js",
   "main": "dist-electron/electron/main.js",

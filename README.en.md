@@ -11,9 +11,6 @@ Qingjing Cleaner is a desktop disk cleanup tool for Windows 10/11. It scans syst
 
 Current version: `1.0.0`
 
-Developer: Anso  
-Support email: ansuo1557@qq.com
-
 ## Features
 
 - Windows system cache scanning and cleanup
@@ -88,4 +85,4 @@ The updater will not treat the same version as a newer release. Use a higher ver
 
 ## License
 
-No open-source license has been declared yet. Commercial redistribution is not permitted without explicit permission.
+This project is licensed under the [MIT License](./LICENSE).
