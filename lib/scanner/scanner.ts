@@ -5,11 +5,13 @@ import { randomUUID } from "node:crypto";
 import type { CleanerSettings, FileFinding, ScanCategory, ScanProgress, ScanSummary, ScanTarget } from "../../types/cleaner";
 import { hashFile } from "./hash";
 import {
+  browserCachePaths,
   chatCachePaths,
   existingUserPaths,
   isProtectedChatFile,
   isProtectedPath,
   isUserContentFile,
+  looksLikeBrowserCacheFile,
   looksLikeCacheFile,
   systemCachePaths
 } from "./path-rules";
@@ -140,6 +142,7 @@ export class ScanManager {
   private rootsForTarget(target: ScanTarget, settings: CleanerSettings) {
     if (target.paths?.length) return target.paths;
     if (target.category === "system_cache") return systemCachePaths();
+    if (target.category === "browser_cache") return browserCachePaths();
     if (target.category === "wechat_cache") return chatCachePaths("wechat");
     if (target.category === "qq_cache") return chatCachePaths("qq");
     return existingUserPaths(settings.customScanPaths);
@@ -242,8 +245,12 @@ export class ScanManager {
       return null;
     }
 
+    if (category === "browser_cache" && !looksLikeBrowserCacheFile(file.path)) {
+      return null;
+    }
+
     const reviewOnly = category === "large_files" || category === "expired_files";
-    const safeChatCache = category === "wechat_cache" || category === "qq_cache";
+    const safeCache = category === "wechat_cache" || category === "qq_cache" || category === "browser_cache" || category === "system_cache";
 
     return {
       id: randomUUID(),
@@ -254,7 +261,7 @@ export class ScanManager {
       category,
       risk: reviewOnly ? "review" : "safe",
       reason: reasonFor(category, file, settings),
-      recommendedAction: reviewOnly ? "review" : safeChatCache || category === "system_cache" ? "delete" : "review"
+      recommendedAction: reviewOnly ? "review" : safeCache ? "delete" : "review"
     };
   }
 
@@ -335,7 +342,9 @@ function reasonFor(category: ScanCategory, file: FileCandidate, settings: Cleane
   const sizeMb = Math.max(0.1, file.size / 1024 / 1024).toFixed(1);
   switch (category) {
     case "system_cache":
-      return "Windows 临时缓存文件";
+      return "Windows 日志、临时文件或框架缓存";
+    case "browser_cache":
+      return "浏览器缓存、GPU 缓存或 Service Worker 缓存";
     case "wechat_cache":
       return `微信缓存或超过 ${settings.chatExpiredDays} 天的聊天附件`;
     case "qq_cache":
@@ -353,6 +362,8 @@ function categoryLabel(category: ScanCategory) {
   switch (category) {
     case "system_cache":
       return "系统缓存";
+    case "browser_cache":
+      return "浏览器缓存";
     case "wechat_cache":
       return "微信缓存";
     case "qq_cache":

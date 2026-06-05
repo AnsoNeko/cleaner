@@ -224,7 +224,7 @@ async function collectDirectoryTrashTargets(items: FileFinding[]) {
   for (const [directoryPath, groupItems] of groups) {
     if (groupItems.length < 50) continue;
     if (isProtectedPath(directoryPath)) continue;
-    if (!groupItems.every((item) => item.category === "system_cache" || item.category === "wechat_cache" || item.category === "qq_cache")) continue;
+    if (!groupItems.every((item) => item.category === "system_cache" || item.category === "browser_cache" || item.category === "wechat_cache" || item.category === "qq_cache")) continue;
 
     let entries;
     try {

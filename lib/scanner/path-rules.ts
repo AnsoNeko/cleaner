@@ -32,7 +32,9 @@ const cacheExtensions = new Set([
   ".bak",
   ".chk",
   ".thumb",
-  ".etl"
+  ".etl",
+  ".cab",
+  ".wer"
 ]);
 
 const mediaExtensions = new Set([
@@ -92,6 +94,26 @@ export function looksLikeCacheFile(value: string) {
   );
 }
 
+export function looksLikeBrowserCacheFile(value: string) {
+  const normalized = normalizePath(value);
+  const lower = value.toLowerCase();
+  return (
+    normalized.includes("\\cache\\") ||
+    normalized.includes("\\cache2\\") ||
+    normalized.includes("\\code cache\\") ||
+    normalized.includes("\\gpucache\\") ||
+    normalized.includes("\\shadercache\\") ||
+    normalized.includes("\\grshadercache\\") ||
+    normalized.includes("\\dawncache\\") ||
+    normalized.includes("\\mediacache\\") ||
+    normalized.includes("\\service worker\\cachestorage\\") ||
+    normalized.includes("\\startupcache\\") ||
+    normalized.includes("\\thumbnails\\") ||
+    lower.endsWith(".tmp") ||
+    lower.endsWith(".log")
+  );
+}
+
 export function isUserContentFile(value: string) {
   return mediaExtensions.has(path.extname(value).toLowerCase());
 }
@@ -110,15 +132,75 @@ export function existingUserPaths(customPaths: string[] = []) {
 
 export function systemCachePaths() {
   const env = process.env;
-  return [
+  return uniquePaths([
     env.TEMP,
     env.TMP,
     env.LOCALAPPDATA ? path.join(env.LOCALAPPDATA, "Temp") : undefined,
     "C:\\Windows\\Temp",
+    "C:\\Windows\\Logs",
+    "C:\\Windows\\LiveKernelReports",
+    "C:\\Windows\\Microsoft.NET\\Framework\\v4.0.30319\\Temporary ASP.NET Files",
+    "C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\Temporary ASP.NET Files",
+    env.PROGRAMDATA ? path.join(env.PROGRAMDATA, "Microsoft", "Windows", "WER") : undefined,
     env.LOCALAPPDATA ? path.join(env.LOCALAPPDATA, "Microsoft", "Windows", "INetCache") : undefined,
     env.LOCALAPPDATA ? path.join(env.LOCALAPPDATA, "Microsoft", "Windows", "Explorer") : undefined,
-    env.LOCALAPPDATA ? path.join(env.LOCALAPPDATA, "D3DSCache") : undefined
+    env.LOCALAPPDATA ? path.join(env.LOCALAPPDATA, "Microsoft", "Windows", "WER") : undefined,
+    env.LOCALAPPDATA ? path.join(env.LOCALAPPDATA, "D3DSCache") : undefined,
+    env.LOCALAPPDATA ? path.join(env.LOCALAPPDATA, "NuGet", "v3-cache") : undefined,
+    env.LOCALAPPDATA ? path.join(env.LOCALAPPDATA, "NuGet", "plugins-cache") : undefined,
+    env.LOCALAPPDATA ? path.join(env.LOCALAPPDATA, "Microsoft", "VisualStudio") : undefined
+  ]);
+}
+
+export function browserCachePaths() {
+  const env = process.env;
+  const local = env.LOCALAPPDATA;
+  const roaming = env.APPDATA;
+  const chromiumBases = [
+    local ? path.join(local, "Google", "Chrome", "User Data") : undefined,
+    local ? path.join(local, "Microsoft", "Edge", "User Data") : undefined,
+    local ? path.join(local, "BraveSoftware", "Brave-Browser", "User Data") : undefined,
+    local ? path.join(local, "Vivaldi", "User Data") : undefined,
+    roaming ? path.join(roaming, "Opera Software", "Opera Stable") : undefined,
+    roaming ? path.join(roaming, "Opera Software", "Opera GX Stable") : undefined
   ].filter(Boolean) as string[];
+
+  const chromiumCacheDirs = [
+    "Cache",
+    "Code Cache",
+    "GPUCache",
+    "ShaderCache",
+    "GrShaderCache",
+    "DawnCache",
+    "Media Cache",
+    path.join("Service Worker", "CacheStorage")
+  ];
+
+  const output: string[] = [];
+  for (const base of chromiumBases) {
+    output.push(...chromiumCacheDirs.map((dir) => path.join(base, dir)));
+    for (const profile of ["Default", "Profile 1", "Profile 2", "Profile 3", "Profile 4", "Profile 5"]) {
+      output.push(...chromiumCacheDirs.map((dir) => path.join(base, profile, dir)));
+    }
+  }
+
+  const firefoxProfiles = roaming ? path.join(roaming, "Mozilla", "Firefox", "Profiles") : undefined;
+  const firefoxLocalProfiles = local ? path.join(local, "Mozilla", "Firefox", "Profiles") : undefined;
+  if (firefoxProfiles) output.push(firefoxProfiles);
+  if (firefoxLocalProfiles) output.push(firefoxLocalProfiles);
+
+  return uniquePaths(output);
+}
+
+function uniquePaths(values: Array<string | undefined>) {
+  const seen = new Set<string>();
+  return values.filter((value): value is string => {
+    if (!value) return false;
+    const normalized = normalizePath(value);
+    if (seen.has(normalized)) return false;
+    seen.add(normalized);
+    return true;
+  });
 }
 
 export function chatCachePaths(kind: "wechat" | "qq") {

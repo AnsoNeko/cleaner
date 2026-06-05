@@ -12,6 +12,7 @@ import {
   FileClock,
   Files,
   FolderSearch,
+  Globe2,
   HardDrive,
   Loader2,
   MessageCircle,
@@ -34,7 +35,8 @@ import type {
 type ViewMode = "overview" | "category" | "settings";
 
 const categoryMeta: Record<ScanCategory, { label: string; short: string; icon: ElementType; description: string }> = {
-  system_cache: { label: "系统缓存", short: "系统", icon: Database, description: "Windows 临时文件、缩略图、D3D 缓存" },
+  system_cache: { label: "系统缓存", short: "系统", icon: Database, description: "Windows 临时文件、日志、WER、.NET 和 VS 缓存" },
+  browser_cache: { label: "浏览器缓存", short: "浏览器", icon: Globe2, description: "Chrome、Edge、Firefox 等缓存和 GPU 缓存" },
   wechat_cache: { label: "微信缓存", short: "微信", icon: MessageCircle, description: "图片、视频、日志和过期聊天附件" },
   qq_cache: { label: "QQ 缓存", short: "QQ", icon: MessageCircle, description: "Tencent Files 中的缓存和过期附件" },
   duplicates: { label: "重复文件", short: "重复", icon: Files, description: "按大小与哈希识别相同内容" },

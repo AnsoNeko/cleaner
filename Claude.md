@@ -21,6 +21,7 @@
 - 关于弹窗展示大 logo、开发者、支持邮箱和版本号。
 - 支持扫描：
   - Windows 系统缓存
+  - 浏览器缓存
   - 微信缓存
   - QQ 缓存
   - C 盘用户目录重复文件
@@ -40,11 +41,14 @@
   - `C:\ProgramData`
 - 微信/QQ 数据库、配置、账号数据列入保护规则，不自动删除。
 - 系统缓存只处理看起来像缓存、临时、日志、缩略图的文件。
+- 系统缓存已包含 Windows 临时目录、Windows 日志、WER 报告、.NET `Temporary ASP.NET Files`、NuGet HTTP 缓存和 Visual Studio 常见缓存。
+- 浏览器缓存独立为分类，覆盖 Chrome、Edge、Brave、Vivaldi、Opera、Firefox 常见 Cache、Code Cache、GPUCache、ShaderCache、Service Worker CacheStorage、Firefox cache2/startupCache/thumbnails 等目录。
+- 浏览器缓存扫描不包含 Cookies、Login Data、History、账号配置等浏览器用户数据路径。
 - 过期文件扫描已收紧为用户内容类文件，不包含快捷方式、配置文件、静态库、可执行文件、脚本、数据库等高风险文件。
 - 大文件和过期文件默认标记为 `review`，需要用户确认。
 - 删除失败不会中断整个清理任务，会记录失败原因。
 - 回收站清理使用 Windows `SHFileOperationW + FOF_ALLOWUNDO` 批量移入回收站，每批最多 8000 个路径。
-- 对系统缓存、微信缓存、QQ 缓存，如果某个叶子目录内文件全部被选中，会优先将该目录整体移入回收站，大幅减少上万小文件的回收站操作次数。
+- 对系统缓存、浏览器缓存、微信缓存、QQ 缓存，如果某个叶子目录内文件全部被选中，会优先将该目录整体移入回收站，大幅减少上万小文件的回收站操作次数。
 - 目录级合并不会用于过期文件、大文件、重复文件，也会跳过受保护系统目录。
 - 隔离区/永久删除最多 32 路并发；隔离区 manifest 批量写入一次。
 

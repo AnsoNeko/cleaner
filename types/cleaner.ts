@@ -1,5 +1,6 @@
 export type ScanCategory =
   | "system_cache"
+  | "browser_cache"
   | "wechat_cache"
   | "qq_cache"
   | "duplicates"
