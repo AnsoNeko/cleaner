@@ -1,0 +1,74 @@
+{
+  "name": "windows-cleaner",
+  "version": "1.0.0",
+  "private": true,
+  "author": "安索 <ansuo1557@qq.com>",
+  "description": "Windows disk cleaner built with Electron and Next.js",
+  "main": "dist-electron/electron/main.js",
+  "scripts": {
+    "dev": "concurrently -k \"next dev\" \"tsc -p tsconfig.electron.json --watch\" \"wait-on http://localhost:3000 dist-electron/electron/main.js && cross-env ELECTRON_START_URL=http://localhost:3000 electron .\"",
+    "build": "next build && tsc -p tsconfig.electron.json",
+    "lint": "next lint",
+    "package": "npm run build && electron-builder --win",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@tailwindcss/postcss": "^4.1.8",
+    "clsx": "^2.1.1",
+    "electron-store": "^10.0.1",
+    "fast-glob": "^3.3.3",
+    "lucide-react": "^0.468.0",
+    "next": "^15.0.4",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.0.1",
+    "@types/react-dom": "^19.0.2",
+    "concurrently": "^9.1.0",
+    "cross-env": "^7.0.3",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "eslint": "^9.16.0",
+    "eslint-config-next": "^15.0.4",
+    "postcss": "^8.4.49",
+    "rcedit": "^5.0.2",
+    "tailwindcss": "^4.1.8",
+    "typescript": "^5.7.2",
+    "wait-on": "^8.0.1"
+  },
+  "build": {
+    "appId": "com.local.windowscleaner",
+    "productName": "Cleaner",
+    "directories": {
+      "output": "release"
+    },
+    "extraMetadata": {
+      "main": "dist-electron/electron/main.js"
+    },
+    "afterPack": "scripts/after-pack-icon.cjs",
+    "files": [
+      "!node_modules/**/*",
+      "out/**/*",
+      "dist-electron/**/*",
+      "logo.png",
+      "64x64.ico",
+      "128x128.ico",
+      "256x256.ico",
+      "package.json"
+    ],
+    "win": {
+      "executableName": "Cleaner",
+      "icon": "256x256.ico",
+      "target": "nsis",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "256x256.ico",
+      "uninstallerIcon": "256x256.ico"
+    }
+  }
+}
