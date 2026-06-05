@@ -16,6 +16,7 @@
     "@tailwindcss/postcss": "^4.1.8",
     "clsx": "^2.1.1",
     "electron-store": "^10.0.1",
+    "electron-updater": "^6.8.3",
     "fast-glob": "^3.3.3",
     "lucide-react": "^0.468.0",
     "next": "^15.0.4",
@@ -41,15 +42,23 @@
   "build": {
     "appId": "com.local.windowscleaner",
     "productName": "Cleaner",
+    "artifactName": "Cleaner-Setup-${version}.${ext}",
     "directories": {
       "output": "release"
     },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "AnsoNeko",
+        "repo": "cleaner",
+        "releaseType": "release"
+      }
+    ],
     "extraMetadata": {
       "main": "dist-electron/electron/main.js"
     },
     "afterPack": "scripts/after-pack-icon.cjs",
     "files": [
-      "!node_modules/**/*",
       "out/**/*",
       "dist-electron/**/*",
       "logo.png",

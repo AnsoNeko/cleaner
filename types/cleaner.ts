@@ -67,6 +67,24 @@ export interface CleanupResult {
   }>;
 }
 
+export type UpdateStatusType =
+  | "idle"
+  | "checking"
+  | "available"
+  | "not_available"
+  | "downloading"
+  | "downloaded"
+  | "error";
+
+export interface UpdateStatus {
+  status: UpdateStatusType;
+  message: string;
+  version?: string;
+  percent?: number;
+  downloadedBytes?: number;
+  totalBytes?: number;
+}
+
 export interface CleanerSettings {
   expiredDays: number;
   chatExpiredDays: number;
@@ -86,4 +104,7 @@ export interface CleanerApi {
   updateSettings(settings: Partial<CleanerSettings>): Promise<CleanerSettings>;
   openPathInExplorer(path: string): Promise<boolean>;
   restoreFromQuarantine(itemId: string): Promise<boolean>;
+  checkForUpdates(): Promise<UpdateStatus>;
+  installUpdate(): Promise<boolean>;
+  onUpdateStatus(callback: (status: UpdateStatus) => void): () => void;
 }

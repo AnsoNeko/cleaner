@@ -19,7 +19,8 @@ import {
   RefreshCw,
   Settings,
   ShieldCheck,
-  Trash2
+  Trash2,
+  UploadCloud
 } from "lucide-react";
 import type {
   CleanerSettings,
@@ -29,7 +30,8 @@ import type {
   ScanCategory,
   ScanProgress,
   ScanSummary,
-  ScanTarget
+  ScanTarget,
+  UpdateStatus
 } from "@/types/cleaner";
 
 type ViewMode = "overview" | "category" | "settings";
@@ -56,6 +58,11 @@ const fallbackSettings: CleanerSettings = {
   allowPermanentDelete: false
 };
 
+const initialUpdateStatus: UpdateStatus = {
+  status: "idle",
+  message: "尚未检查更新"
+};
+
 export default function Home() {
   const [settings, setSettings] = useState<CleanerSettings>(fallbackSettings);
   const [summary, setSummary] = useState<ScanSummary | null>(null);
@@ -69,10 +76,19 @@ export default function Home() {
   const [showConfirm, setShowConfirm] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
   const [cleanupResult, setCleanupResult] = useState<CleanupResult | null>(null);
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus>(initialUpdateStatus);
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     void window.cleaner?.getSettings().then(setSettings).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    return window.cleaner?.onUpdateStatus((status) => {
+      setUpdateStatus(status);
+      setIsCheckingUpdate(status.status === "checking");
+    });
   }, []);
 
   useEffect(() => {
@@ -176,6 +192,25 @@ export default function Home() {
   async function saveSettings(next: Partial<CleanerSettings>) {
     setSettings((current) => ({ ...current, ...next }));
     await window.cleaner?.updateSettings(next);
+  }
+
+  async function checkForUpdates() {
+    setIsCheckingUpdate(true);
+    try {
+      const status = await window.cleaner?.checkForUpdates();
+      if (status) setUpdateStatus(status);
+    } catch (error) {
+      setUpdateStatus({
+        status: "error",
+        message: error instanceof Error ? error.message : "检查更新失败"
+      });
+    } finally {
+      setIsCheckingUpdate(false);
+    }
+  }
+
+  async function installUpdate() {
+    await window.cleaner?.installUpdate();
   }
 
   function openCategory(category: ScanCategory) {
@@ -326,7 +361,16 @@ export default function Home() {
             />
           )}
 
-          {view === "settings" && <SettingsPage settings={settings} onChange={saveSettings} />}
+          {view === "settings" && (
+            <SettingsPage
+              settings={settings}
+              updateStatus={updateStatus}
+              isCheckingUpdate={isCheckingUpdate}
+              onChange={saveSettings}
+              onCheckForUpdates={checkForUpdates}
+              onInstallUpdate={installUpdate}
+            />
+          )}
         </section>
       </div>
 
@@ -473,15 +517,83 @@ function CategoryDetailPage({
   );
 }
 
-function SettingsPage({ settings, onChange }: { settings: CleanerSettings; onChange: (settings: Partial<CleanerSettings>) => void }) {
+function SettingsPage({
+  isCheckingUpdate,
+  onChange,
+  onCheckForUpdates,
+  onInstallUpdate,
+  settings,
+  updateStatus
+}: {
+  isCheckingUpdate: boolean;
+  onChange: (settings: Partial<CleanerSettings>) => void;
+  onCheckForUpdates: () => void;
+  onInstallUpdate: () => void;
+  settings: CleanerSettings;
+  updateStatus: UpdateStatus;
+}) {
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
       <SettingsPanel settings={settings} onChange={onChange} />
-      <section className="rounded-[8px] border border-[#dfe7e2] bg-white p-4 shadow-sm">
-        <h3 className="font-semibold">设置说明</h3>
-        <p className="mt-2 text-sm leading-6 text-[#66736d]">阈值会影响下一次扫描结果。永久删除需要显式启用，默认建议使用回收站或隔离区。</p>
-      </section>
+      <div className="space-y-4">
+        <UpdatePanel
+          isChecking={isCheckingUpdate}
+          status={updateStatus}
+          onCheck={onCheckForUpdates}
+          onInstall={onInstallUpdate}
+        />
+        <section className="rounded-[8px] border border-[#dfe7e2] bg-white p-4 shadow-sm">
+          <h3 className="font-semibold">设置说明</h3>
+          <p className="mt-2 text-sm leading-6 text-[#66736d]">阈值会影响下一次扫描结果。永久删除需要显式启用，默认建议使用回收站或隔离区。</p>
+        </section>
+      </div>
     </div>
+  );
+}
+
+function UpdatePanel({
+  isChecking,
+  onCheck,
+  onInstall,
+  status
+}: {
+  isChecking: boolean;
+  onCheck: () => void;
+  onInstall: () => void;
+  status: UpdateStatus;
+}) {
+  const downloading = status.status === "downloading";
+  const downloaded = status.status === "downloaded";
+  const canCheck = !isChecking && !downloading;
+
+  return (
+    <section className="rounded-[8px] border border-[#dfe7e2] bg-white p-4 shadow-sm">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h3 className="font-semibold">软件更新</h3>
+        <UploadCloud size={18} className="text-[#15806f]" />
+      </div>
+      <p className="text-sm leading-6 text-[#66736d]">{status.message}</p>
+      {downloading && (
+        <div className="mt-3">
+          <div className="h-2 overflow-hidden rounded-full bg-[#edf3f0]">
+            <div className="h-full rounded-full bg-[#15806f] transition-all" style={{ width: `${Math.min(100, Math.max(0, status.percent ?? 0))}%` }} />
+          </div>
+          <p className="mt-2 text-xs text-[#66736d]">{Math.round(status.percent ?? 0)}%</p>
+        </div>
+      )}
+      <div className="mt-4 flex flex-wrap gap-2">
+        <button className="secondary-button" disabled={!canCheck} onClick={onCheck}>
+          {isChecking ? <Loader2 className="animate-spin" size={17} /> : <RefreshCw size={17} />}
+          检查更新
+        </button>
+        {downloaded && (
+          <button className="primary-button" onClick={onInstall}>
+            <UploadCloud size={17} />
+            重启安装
+          </button>
+        )}
+      </div>
+    </section>
   );
 }
 

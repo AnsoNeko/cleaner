@@ -19,6 +19,7 @@
 - 侧边栏分类入口与分类卡片一致，进入对应分类明细页。
 - 设置按钮进入独立设置页，不再滚动到下方区域。
 - 关于弹窗展示大 logo、开发者、支持邮箱和版本号。
+- 设置页提供软件更新区域，支持检查 GitHub Releases、自动下载更新包，并在下载完成后重启安装。
 - 支持扫描：
   - Windows 系统缓存
   - 浏览器缓存
@@ -74,6 +75,8 @@
 - `build.win.icon`、`nsis.installerIcon`、`nsis.uninstallerIcon` 指向 `256x256.ico`。
 - 因当前 Windows 用户权限无法解压 `winCodeSign` 中的符号链接，`signAndEditExecutable` 保持 `false`。
 - 为保证安装后的 `Cleaner.exe` 使用项目 logo，`afterPack` 阶段通过 `scripts/after-pack-icon.cjs` 调用 `rcedit` 写入 exe 图标资源。
+- 自动更新使用 `electron-updater`，更新源为 GitHub Releases：`AnsoNeko/cleaner`。
+- 发布新版本时需要递增 `package.json` 的 `version`，并将安装包、`.blockmap`、`latest.yml` 一起上传到 GitHub Release。
 
 常用打包环境变量：
 
@@ -91,10 +94,18 @@ npm run build
 npm run package
 ```
 
+发布自动更新版本时使用：
+
+```powershell
+$env:GH_TOKEN='<github token>'
+npm run package -- --publish always
+```
+
 打包输出：
 
 - `release\Cleaner Setup 1.0.0.exe`
 - `release\win-unpacked\Cleaner.exe`
+- `release\latest.yml`
 
 这些输出属于构建产物，不提交到 git。
 

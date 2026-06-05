@@ -1,6 +1,7 @@
 import path from "node:path";
 import { app, BrowserWindow, ipcMain, shell } from "electron";
-import type { CleanupRequest, ScanTarget } from "../types/cleaner";
+import { autoUpdater } from "electron-updater";
+import type { CleanupRequest, ScanTarget, UpdateStatus } from "../types/cleaner";
 import { CleanupManager } from "../lib/cleaner/cleanup";
 import { ScanManager } from "../lib/scanner/scanner";
 import { JsonStore } from "../lib/storage/store";
@@ -9,6 +10,10 @@ let mainWindow: BrowserWindow | null = null;
 let store: JsonStore;
 let scanner: ScanManager;
 let cleaner: CleanupManager;
+let updateStatus: UpdateStatus = {
+  status: "idle",
+  message: "尚未检查更新"
+};
 
 function getIconPath() {
   if (app.isPackaged) {
@@ -44,6 +49,83 @@ function createWindow() {
   }
 }
 
+function setUpdateStatus(status: UpdateStatus) {
+  updateStatus = status;
+  mainWindow?.webContents.send("cleaner:updateStatus", status);
+}
+
+function configureAutoUpdater() {
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on("checking-for-update", () => {
+    setUpdateStatus({ status: "checking", message: "正在检查更新" });
+  });
+
+  autoUpdater.on("update-available", (info) => {
+    setUpdateStatus({
+      status: "available",
+      message: `发现新版本 ${info.version}，正在下载`,
+      version: info.version
+    });
+  });
+
+  autoUpdater.on("update-not-available", (info) => {
+    setUpdateStatus({
+      status: "not_available",
+      message: "当前已是最新版本",
+      version: info.version
+    });
+  });
+
+  autoUpdater.on("download-progress", (progress) => {
+    setUpdateStatus({
+      status: "downloading",
+      message: `正在下载更新 ${Math.round(progress.percent)}%`,
+      percent: progress.percent,
+      downloadedBytes: progress.transferred,
+      totalBytes: progress.total
+    });
+  });
+
+  autoUpdater.on("update-downloaded", (info) => {
+    setUpdateStatus({
+      status: "downloaded",
+      message: `新版本 ${info.version} 已下载，重启后安装`,
+      version: info.version
+    });
+  });
+
+  autoUpdater.on("error", (error) => {
+    setUpdateStatus({
+      status: "error",
+      message: error instanceof Error ? error.message : "检查更新失败"
+    });
+  });
+}
+
+async function checkForUpdates() {
+  if (!app.isPackaged) {
+    setUpdateStatus({
+      status: "not_available",
+      message: "开发模式下不检查在线更新"
+    });
+    return updateStatus;
+  }
+
+  setUpdateStatus({ status: "checking", message: "正在检查更新" });
+  try {
+    await autoUpdater.checkForUpdates();
+  } catch (error) {
+    setUpdateStatus({
+      status: "error",
+      message: error instanceof Error ? error.message : "检查更新失败"
+    });
+  }
+
+  return updateStatus;
+}
+
 function registerIpc() {
   ipcMain.handle("cleaner:startScan", async (_event, targets: ScanTarget[]) => {
     const settings = await store.getSettings();
@@ -72,14 +154,29 @@ function registerIpc() {
   });
 
   ipcMain.handle("cleaner:restoreFromQuarantine", (_event, itemId: string) => cleaner.restoreFromQuarantine(itemId));
+  ipcMain.handle("cleaner:checkForUpdates", () => checkForUpdates());
+  ipcMain.handle("cleaner:installUpdate", () => {
+    if (updateStatus.status !== "downloaded") return false;
+    autoUpdater.quitAndInstall(false, true);
+    return true;
+  });
 }
 
 void app.whenReady().then(() => {
   store = new JsonStore(app.getPath("userData"));
   scanner = new ScanManager();
   cleaner = new CleanupManager(app.getPath("userData"));
+  configureAutoUpdater();
   registerIpc();
   createWindow();
+  mainWindow?.webContents.once("did-finish-load", () => {
+    mainWindow?.webContents.send("cleaner:updateStatus", updateStatus);
+  });
+  if (app.isPackaged) {
+    setTimeout(() => {
+      void checkForUpdates();
+    }, 3000);
+  }
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

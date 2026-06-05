@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { CleanerApi, CleanupRequest, CleanerSettings, ScanTarget } from "../types/cleaner";
+import type { CleanerApi, CleanupRequest, CleanerSettings, ScanTarget, UpdateStatus } from "../types/cleaner";
 
 const api: CleanerApi = {
   startScan: (targets: ScanTarget[]) => ipcRenderer.invoke("cleaner:startScan", targets),
@@ -10,7 +10,14 @@ const api: CleanerApi = {
   getSettings: () => ipcRenderer.invoke("cleaner:getSettings"),
   updateSettings: (settings: Partial<CleanerSettings>) => ipcRenderer.invoke("cleaner:updateSettings", settings),
   openPathInExplorer: (targetPath: string) => ipcRenderer.invoke("cleaner:openPathInExplorer", targetPath),
-  restoreFromQuarantine: (itemId: string) => ipcRenderer.invoke("cleaner:restoreFromQuarantine", itemId)
+  restoreFromQuarantine: (itemId: string) => ipcRenderer.invoke("cleaner:restoreFromQuarantine", itemId),
+  checkForUpdates: () => ipcRenderer.invoke("cleaner:checkForUpdates"),
+  installUpdate: () => ipcRenderer.invoke("cleaner:installUpdate"),
+  onUpdateStatus: (callback: (status: UpdateStatus) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, status: UpdateStatus) => callback(status);
+    ipcRenderer.on("cleaner:updateStatus", listener);
+    return () => ipcRenderer.removeListener("cleaner:updateStatus", listener);
+  }
 };
 
 contextBridge.exposeInMainWorld("cleaner", api);
