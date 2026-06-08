@@ -9,7 +9,7 @@
 
 轻净清理是一款面向 Windows 10/11 的桌面磁盘清理工具。它提供系统缓存、浏览器缓存、聊天软件缓存、重复文件、过期文件和大文件扫描能力，并在清理前展示明细与确认摘要，尽量降低误删风险。
 
-当前版本：`1.0.0`
+当前版本：`1.0.1`
 
 ## 主要功能
 
@@ -35,7 +35,7 @@
 
 可在 GitHub Release 页面下载 Windows 安装包：
 
-[下载轻净清理 1.0.0](https://github.com/AnsoNeko/cleaner/releases/tag/v1.0.0)
+[下载轻净清理 1.0.1](https://github.com/AnsoNeko/cleaner/releases/tag/v1.0.1)
 
 ## 技术栈
 
@@ -70,18 +70,16 @@ npm run package
 打包产物默认输出到：
 
 ```text
-release/Cleaner-Setup-1.0.0.exe
+release/Cleaner-Setup-1.0.1.exe
 ```
 
-## 自动更新发布说明
+## 使用注意事项
 
-自动更新通过 GitHub Releases 提供更新源。发布新版本时需要：
-
-1. 提升 `package.json` 中的 `version`
-2. 执行 `npm run package`
-3. 将安装包、`.blockmap` 和 `latest.yml` 上传到对应 Release
-
-同版本号不会触发更新检测，发布更新时请使用更高版本号。
+- 清理前请先查看明细，确认不需要的文件再执行清理。
+- 默认会优先移入回收站或隔离区，不建议直接永久删除。
+- Windows 日志、Windows 临时目录、.NET 临时文件等系统目录下的项目可能需要管理员权限。
+- 需要管理员权限的项目默认不会自动选中；如需清理，请右键以管理员身份运行程序。
+- 微信、QQ 数据库和账号配置文件会被保护，不会作为普通缓存清理。
 
 ## 许可证
 

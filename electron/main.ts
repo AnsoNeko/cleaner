@@ -1,7 +1,7 @@
 import path from "node:path";
 import { app, BrowserWindow, ipcMain, shell } from "electron";
 import { autoUpdater } from "electron-updater";
-import type { CleanupRequest, ScanTarget, UpdateStatus } from "../types/cleaner";
+import type { Announcement, CleanupRequest, ScanTarget, UpdateStatus } from "../types/cleaner";
 import { CleanupManager } from "../lib/cleaner/cleanup";
 import { ScanManager } from "../lib/scanner/scanner";
 import { JsonStore } from "../lib/storage/store";
@@ -10,10 +10,12 @@ let mainWindow: BrowserWindow | null = null;
 let store: JsonStore;
 let scanner: ScanManager;
 let cleaner: CleanupManager;
+let announcementCache: Announcement | null = null;
 let updateStatus: UpdateStatus = {
   status: "idle",
   message: "尚未检查更新"
 };
+const announcementUrl = "https://github.com/AnsoNeko/cleaner/releases/latest/download/announcement.md";
 
 function getIconPath() {
   if (app.isPackaged) {
@@ -126,6 +128,28 @@ async function checkForUpdates() {
   return updateStatus;
 }
 
+async function getAnnouncement(): Promise<Announcement> {
+  if (announcementCache) return announcementCache;
+
+  try {
+    const response = await fetch(announcementUrl);
+    if (!response.ok) throw new Error(`公告读取失败：HTTP ${response.status}`);
+    const content = (await response.text()).trim();
+    announcementCache = {
+      content: content || "暂无公告。",
+      source: announcementUrl,
+      fetchedAt: new Date().toISOString()
+    };
+    return announcementCache;
+  } catch (error) {
+    return {
+      content: error instanceof Error ? error.message : "公告读取失败",
+      source: announcementUrl,
+      fetchedAt: new Date().toISOString()
+    };
+  }
+}
+
 function registerIpc() {
   ipcMain.handle("cleaner:startScan", async (_event, targets: ScanTarget[]) => {
     const settings = await store.getSettings();
@@ -155,6 +179,7 @@ function registerIpc() {
 
   ipcMain.handle("cleaner:restoreFromQuarantine", (_event, itemId: string) => cleaner.restoreFromQuarantine(itemId));
   ipcMain.handle("cleaner:checkForUpdates", () => checkForUpdates());
+  ipcMain.handle("cleaner:getAnnouncement", () => getAnnouncement());
   ipcMain.handle("cleaner:installUpdate", () => {
     if (updateStatus.status !== "downloaded") return false;
     autoUpdater.quitAndInstall(false, true);

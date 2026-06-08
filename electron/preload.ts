@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { CleanerApi, CleanupRequest, CleanerSettings, ScanTarget, UpdateStatus } from "../types/cleaner";
+import type { Announcement, CleanerApi, CleanupRequest, CleanerSettings, ScanTarget, UpdateStatus } from "../types/cleaner";
 
 const api: CleanerApi = {
   startScan: (targets: ScanTarget[]) => ipcRenderer.invoke("cleaner:startScan", targets),
@@ -17,7 +17,8 @@ const api: CleanerApi = {
     const listener = (_event: Electron.IpcRendererEvent, status: UpdateStatus) => callback(status);
     ipcRenderer.on("cleaner:updateStatus", listener);
     return () => ipcRenderer.removeListener("cleaner:updateStatus", listener);
-  }
+  },
+  getAnnouncement: (): Promise<Announcement> => ipcRenderer.invoke("cleaner:getAnnouncement")
 };
 
 contextBridge.exposeInMainWorld("cleaner", api);

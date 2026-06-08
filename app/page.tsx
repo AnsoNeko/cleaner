@@ -23,6 +23,7 @@ import {
   UploadCloud
 } from "lucide-react";
 import type {
+  Announcement,
   CleanerSettings,
   CleanupRequest,
   CleanupResult,
@@ -48,6 +49,7 @@ const categoryMeta: Record<ScanCategory, { label: string; short: string; icon: E
 
 const categoryOrder = Object.keys(categoryMeta) as ScanCategory[];
 const defaultTargets: ScanTarget[] = categoryOrder.map((category) => ({ category }));
+const appVersion = "1.0.1";
 
 const fallbackSettings: CleanerSettings = {
   expiredDays: 180,
@@ -103,7 +105,7 @@ export default function Home() {
         const nextSummary = await window.cleaner?.getScanSummary(next.scanId);
         if (nextSummary) {
           setSummary(nextSummary);
-          setSelected(new Set(nextSummary.findings.filter(isSelectableFinding).map((item) => item.id)));
+          setSelected(new Set(nextSummary.findings.filter(isDefaultSelectedFinding).map((item) => item.id)));
         }
         setIsScanning(false);
       }
@@ -229,6 +231,9 @@ export default function Home() {
   }
 
   function toggleCategory(category: ScanCategory, checked: boolean) {
+    if (checked && selectableByCategory(category).some((item) => item.requiresAdmin) && !confirmAdminSelection()) {
+      return;
+    }
     const next = new Set(selected);
     for (const item of selectableByCategory(category)) {
       if (checked) next.add(item.id);
@@ -238,6 +243,9 @@ export default function Home() {
   }
 
   function toggleAllVisible(checked: boolean) {
+    if (checked && detailFindings.some((item) => isSelectableFinding(item) && item.requiresAdmin) && !confirmAdminSelection()) {
+      return;
+    }
     const next = new Set(selected);
     detailFindings.filter(isSelectableFinding).forEach((item) => {
       if (checked) next.add(item.id);
@@ -353,6 +361,9 @@ export default function Home() {
               onQueryChange={setQuery}
               onToggleAllVisible={toggleAllVisible}
               onToggleFinding={(item, checked) => {
+                if (checked && item.requiresAdmin && !confirmAdminSelection()) {
+                  return;
+                }
                 const next = new Set(selected);
                 if (checked) next.add(item.id);
                 else next.delete(item.id);
@@ -380,6 +391,7 @@ export default function Home() {
           mode={settings.cleanupMode}
           selectedBytes={selectedBytes}
           selectedCount={selected.size}
+          adminCount={selectedItems.filter((item) => item.requiresAdmin).length}
           onCancel={() => setShowConfirm(false)}
           onConfirm={cleanup}
         />
@@ -503,6 +515,7 @@ function CategoryDetailPage({
                       {item.path}
                     </button>
                     <p className="mt-1 truncate text-xs text-[#66736d]">{item.reason}</p>
+                    {item.requiresAdmin && <p className="mt-1 text-xs font-medium text-amber-700">需要管理员权限，默认不会自动选中</p>}
                   </td>
                   <td className="px-3 py-3 font-medium">{formatBytes(item.size)}</td>
                   <td className="px-3 py-3"><RiskBadge risk={item.risk} /></td>
@@ -730,7 +743,7 @@ function LabeledInput({ label, value, onChange }: { label: string; value: number
   );
 }
 
-function ConfirmDialog({ isCleaning, mode, onCancel, onConfirm, selectedBytes, selectedCount }: { isCleaning: boolean; mode: CleanupRequest["mode"]; onCancel: () => void; onConfirm: () => void; selectedBytes: number; selectedCount: number }) {
+function ConfirmDialog({ adminCount, isCleaning, mode, onCancel, onConfirm, selectedBytes, selectedCount }: { adminCount: number; isCleaning: boolean; mode: CleanupRequest["mode"]; onCancel: () => void; onConfirm: () => void; selectedBytes: number; selectedCount: number }) {
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-[#17201c]/35 p-4 backdrop-blur-sm">
       <div className="w-full max-w-[520px] rounded-[8px] border border-[#dfe7e2] bg-white p-5 shadow-xl">
@@ -746,6 +759,11 @@ function ConfirmDialog({ isCleaning, mode, onCancel, onConfirm, selectedBytes, s
         <div className="rounded-[8px] bg-[#f6faf8] p-3 text-sm text-[#4d5b55]">
           当前模式：{modeLabel(mode)}。系统关键目录、聊天数据库和建议保留项不会被清理。
         </div>
+        {adminCount > 0 && (
+          <div className="mt-3 rounded-[8px] border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-900">
+            已选择 {adminCount} 项需要管理员权限的系统文件。若清理失败，请右键以管理员身份运行轻净清理后再执行。
+          </div>
+        )}
         <div className="mt-5 flex justify-end gap-2">
           <button className="secondary-button" onClick={onCancel}>取消</button>
           <button className="danger-button" disabled={isCleaning} onClick={onConfirm}>
@@ -759,6 +777,23 @@ function ConfirmDialog({ isCleaning, mode, onCancel, onConfirm, selectedBytes, s
 }
 
 function AboutDialog({ onClose }: { onClose: () => void }) {
+  const [announcement, setAnnouncement] = useState<Announcement | null>(null);
+  const [announcementError, setAnnouncementError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    void window.cleaner?.getAnnouncement()
+      .then((next) => {
+        if (mounted) setAnnouncement(next);
+      })
+      .catch((error) => {
+        if (mounted) setAnnouncementError(error instanceof Error ? error.message : "公告读取失败");
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-[#17201c]/35 p-4 backdrop-blur-sm">
       <div className="w-full max-w-[420px] rounded-[8px] border border-[#dfe7e2] bg-white p-6 text-center shadow-xl">
@@ -766,10 +801,19 @@ function AboutDialog({ onClose }: { onClose: () => void }) {
           <img src="./logo.png" alt="轻净清理 Logo" className="h-full w-full object-cover" />
         </div>
         <h3 className="text-xl font-semibold">轻净清理</h3>
-        <p className="mt-1 text-sm text-[#66736d]">版本号 1.0.0</p>
+        <p className="mt-1 text-sm text-[#66736d]">版本号 {appVersion}</p>
         <div className="mt-5 rounded-[8px] bg-[#f6faf8] p-4 text-left text-sm leading-7 text-[#4d5b55]">
           <p><span className="text-[#66736d]">开发者：</span>安索</p>
           <p><span className="text-[#66736d]">支持邮箱：</span>ansuo1557@qq.com</p>
+        </div>
+        <div className="mt-4 rounded-[8px] border border-[#dfe7e2] bg-white p-4 text-left">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <h4 className="font-semibold">公告栏</h4>
+            <span className="text-xs text-[#66736d]">GitHub Release</span>
+          </div>
+          <div className="max-h-40 overflow-auto whitespace-pre-wrap text-sm leading-6 text-[#4d5b55]">
+            {announcement?.content || announcementError || "正在读取公告..."}
+          </div>
         </div>
         <div className="mt-5 flex justify-center">
           <button className="primary-button" onClick={onClose}>知道了</button>
@@ -815,6 +859,14 @@ function actionLabel(action: FileFinding["recommendedAction"]) {
 
 function isSelectableFinding(item: FileFinding) {
   return item.recommendedAction !== "keep" && item.risk !== "danger";
+}
+
+function isDefaultSelectedFinding(item: FileFinding) {
+  return isSelectableFinding(item) && !item.requiresAdmin;
+}
+
+function confirmAdminSelection() {
+  return window.confirm("你选择的项目包含需要管理员权限的 Windows 系统文件。请使用管理员身份运行程序后再清理，否则可能因为权限不足而失败。是否仍要选中？");
 }
 
 function eyebrowForView(view: ViewMode, category: ScanCategory) {

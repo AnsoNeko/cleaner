@@ -69,6 +69,14 @@ export function isProtectedPath(value: string) {
   return protectedRoots.some((root) => normalized === root || normalized.startsWith(`${root}\\`));
 }
 
+export function requiresAdminForCleanup(value: string) {
+  const normalized = normalizePath(value);
+  return (
+    normalized.startsWith("c:\\windows\\") ||
+    normalized.startsWith("c:\\programdata\\")
+  );
+}
+
 export function isProtectedChatFile(value: string) {
   const ext = path.extname(value).toLowerCase();
   const normalized = normalizePath(value);

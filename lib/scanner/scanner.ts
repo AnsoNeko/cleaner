@@ -13,6 +13,7 @@ import {
   isUserContentFile,
   looksLikeBrowserCacheFile,
   looksLikeCacheFile,
+  requiresAdminForCleanup,
   systemCachePaths
 } from "./path-rules";
 
@@ -249,8 +250,11 @@ export class ScanManager {
       return null;
     }
 
-    const reviewOnly = category === "large_files" || category === "expired_files";
+    const requiresAdmin = category === "system_cache" && requiresAdminForCleanup(file.path);
+    const reviewOnly = category === "large_files" || category === "expired_files" || requiresAdmin;
     const safeCache = category === "wechat_cache" || category === "qq_cache" || category === "browser_cache" || category === "system_cache";
+
+    const reason = requiresAdmin ? `需要管理员权限：${reasonFor(category, file, settings)}` : reasonFor(category, file, settings);
 
     return {
       id: randomUUID(),
@@ -260,7 +264,8 @@ export class ScanManager {
       accessedAt: file.accessedAt?.toISOString(),
       category,
       risk: reviewOnly ? "review" : "safe",
-      reason: reasonFor(category, file, settings),
+      reason,
+      requiresAdmin,
       recommendedAction: reviewOnly ? "review" : safeCache ? "delete" : "review"
     };
   }

@@ -26,6 +26,7 @@ export interface FileFinding {
   risk: RiskLevel;
   reason: string;
   duplicateGroupId?: string;
+  requiresAdmin?: boolean;
   recommendedAction: "delete" | "keep" | "review";
 }
 
@@ -85,6 +86,12 @@ export interface UpdateStatus {
   totalBytes?: number;
 }
 
+export interface Announcement {
+  content: string;
+  source: string;
+  fetchedAt: string;
+}
+
 export interface CleanerSettings {
   expiredDays: number;
   chatExpiredDays: number;
@@ -107,4 +114,5 @@ export interface CleanerApi {
   checkForUpdates(): Promise<UpdateStatus>;
   installUpdate(): Promise<boolean>;
   onUpdateStatus(callback: (status: UpdateStatus) => void): () => void;
+  getAnnouncement(): Promise<Announcement>;
 }
