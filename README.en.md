@@ -9,11 +9,12 @@
 
 Qingjing Cleaner is a desktop disk cleanup tool for Windows 10/11. It scans system caches, browser caches, chat app caches, duplicate files, expired files, and large files. Before cleanup, it shows detailed results and a confirmation summary to reduce the risk of accidental deletion.
 
-Current version: `1.0.1`
+Current version: `1.0.2`
 
 ## Features
 
 - Windows system cache scanning and cleanup
+- Admin-required system cleanup items shown as a separate category
 - Browser cache scanning and cleanup
 - WeChat and QQ cache scanning and cleanup
 - Duplicate file detection in common C drive user folders
@@ -35,7 +36,7 @@ Current version: `1.0.1`
 
 Download the Windows installer from GitHub Releases:
 
-[Download Qingjing Cleaner 1.0.1](https://github.com/AnsoNeko/cleaner/releases/tag/v1.0.1)
+[Download Qingjing Cleaner 1.0.2](https://github.com/AnsoNeko/cleaner/releases/tag/v1.0.2)
 
 ## Tech Stack
 
@@ -70,15 +71,15 @@ npm run package
 The installer is generated at:
 
 ```text
-release/Cleaner-Setup-1.0.1.exe
+release/Cleaner-Setup-1.0.2.exe
 ```
 
 ## Usage Notes
 
 - Review file details before cleanup and confirm that selected files are no longer needed.
 - The default cleanup mode prefers the trash or quarantine instead of permanent deletion.
-- Windows logs, Windows temporary directories, .NET temporary files, and similar system paths may require administrator privileges.
-- Items that require administrator privileges are not selected automatically. Run the app as administrator if you need to clean them.
+- Windows logs, Windows temporary directories, .NET temporary files, and similar system paths are grouped under the admin-required category.
+- The admin-required category is not selected automatically. Run the app as administrator if you need to clean it.
 - WeChat and QQ databases, account files, and configuration files are protected from normal cache cleanup.
 
 ## License

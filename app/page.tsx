@@ -18,6 +18,7 @@ import {
   MessageCircle,
   RefreshCw,
   Settings,
+  ShieldAlert,
   ShieldCheck,
   Trash2,
   UploadCloud
@@ -39,6 +40,7 @@ type ViewMode = "overview" | "category" | "settings";
 
 const categoryMeta: Record<ScanCategory, { label: string; short: string; icon: ElementType; description: string }> = {
   system_cache: { label: "系统缓存", short: "系统", icon: Database, description: "Windows 临时文件、日志、WER、.NET 和 VS 缓存" },
+  admin_required: { label: "需管理员权限", short: "提权", icon: ShieldAlert, description: "Windows 目录下的日志和缓存，清理前请以管理员身份运行" },
   browser_cache: { label: "浏览器缓存", short: "浏览器", icon: Globe2, description: "Chrome、Edge、Firefox 等缓存和 GPU 缓存" },
   wechat_cache: { label: "微信缓存", short: "微信", icon: MessageCircle, description: "图片、视频、日志和过期聊天附件" },
   qq_cache: { label: "QQ 缓存", short: "QQ", icon: MessageCircle, description: "Tencent Files 中的缓存和过期附件" },
@@ -49,7 +51,7 @@ const categoryMeta: Record<ScanCategory, { label: string; short: string; icon: E
 
 const categoryOrder = Object.keys(categoryMeta) as ScanCategory[];
 const defaultTargets: ScanTarget[] = categoryOrder.map((category) => ({ category }));
-const appVersion = "1.0.1";
+const appVersion = "1.0.2";
 
 const fallbackSettings: CleanerSettings = {
   expiredDays: 180,
@@ -485,6 +487,12 @@ function CategoryDetailPage({
         </div>
       </div>
 
+      {activeCategory === "admin_required" && (
+        <div className="border-b border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
+          该分类位于 Windows 受保护目录下，清理时通常需要管理员权限。请右键以管理员身份运行轻净清理后再勾选并执行清理。
+        </div>
+      )}
+
       <div className="max-h-[620px] overflow-auto">
         {findings.length === 0 ? (
           <EmptyState activeCategory={activeCategory} isScanning={isScanning} />
@@ -666,6 +674,9 @@ function CategoryCard({
         <ChevronRight size={18} className="text-[#9aa8a2]" />
       </div>
       <p className="mt-1 min-h-10 text-sm leading-5 text-[#66736d]">{meta.description}</p>
+      {category === "admin_required" && (
+        <p className="mt-2 rounded-[6px] bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800">需要管理员权限</p>
+      )}
       <div className="mt-4 flex items-end justify-between">
         <span className="text-2xl font-semibold">{formatBytes(bytes)}</span>
         <span className="rounded-full bg-[#f1f5f3] px-2.5 py-1 text-xs text-[#66736d]">{findings.length} 项</span>

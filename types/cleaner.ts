@@ -1,5 +1,6 @@
 export type ScanCategory =
   | "system_cache"
+  | "admin_required"
   | "browser_cache"
   | "wechat_cache"
   | "qq_cache"

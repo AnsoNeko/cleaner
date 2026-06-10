@@ -129,7 +129,7 @@ export class ScanManager {
     for (const root of roots) {
       candidates.push(
         ...(await this.walk(root, scanId, {
-          allowProtectedRoot: target.category === "system_cache",
+          allowProtectedRoot: target.category === "system_cache" || target.category === "admin_required",
           maxFiles: maxFilesPerRoot
         }))
       );
@@ -142,7 +142,7 @@ export class ScanManager {
 
   private rootsForTarget(target: ScanTarget, settings: CleanerSettings) {
     if (target.paths?.length) return target.paths;
-    if (target.category === "system_cache") return systemCachePaths();
+    if (target.category === "system_cache" || target.category === "admin_required") return systemCachePaths();
     if (target.category === "browser_cache") return browserCachePaths();
     if (target.category === "wechat_cache") return chatCachePaths("wechat");
     if (target.category === "qq_cache") return chatCachePaths("qq");
@@ -242,7 +242,7 @@ export class ScanManager {
       return null;
     }
 
-    if (category === "system_cache" && !looksLikeCacheFile(file.path)) {
+    if ((category === "system_cache" || category === "admin_required") && !looksLikeCacheFile(file.path)) {
       return null;
     }
 
@@ -250,7 +250,9 @@ export class ScanManager {
       return null;
     }
 
-    const requiresAdmin = category === "system_cache" && requiresAdminForCleanup(file.path);
+    const requiresAdmin = (category === "system_cache" || category === "admin_required") && requiresAdminForCleanup(file.path);
+    if (category === "system_cache" && requiresAdmin) return null;
+    if (category === "admin_required" && !requiresAdmin) return null;
     const reviewOnly = category === "large_files" || category === "expired_files" || requiresAdmin;
     const safeCache = category === "wechat_cache" || category === "qq_cache" || category === "browser_cache" || category === "system_cache";
 
@@ -345,7 +347,9 @@ function chooseDuplicateKeeper(files: FileCandidate[]) {
 
 function reasonFor(category: ScanCategory, file: FileCandidate, settings: CleanerSettings) {
   const sizeMb = Math.max(0.1, file.size / 1024 / 1024).toFixed(1);
-  switch (category) {
+    switch (category) {
+    case "admin_required":
+      return "需要管理员权限的 Windows 日志、临时文件或框架缓存";
     case "system_cache":
       return "Windows 日志、临时文件或框架缓存";
     case "browser_cache":
@@ -365,6 +369,8 @@ function reasonFor(category: ScanCategory, file: FileCandidate, settings: Cleane
 
 function categoryLabel(category: ScanCategory) {
   switch (category) {
+    case "admin_required":
+      return "管理员权限清理";
     case "system_cache":
       return "系统缓存";
     case "browser_cache":
