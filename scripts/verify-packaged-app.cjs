@@ -9,6 +9,8 @@ const { randomUUID } = require("node:crypto");
 async function main() {
   const executable = path.resolve(process.argv[2] || "release/win-unpacked/Cleaner.exe");
   const version = process.argv[3] || require("../package.json").version;
+  const online = process.argv.includes("--online");
+  if (online) assert.equal(version, require("../package.json").version, "Online smoke must use the current version to avoid installing an update on exit");
   const parent = path.resolve(__dirname, "../.test-fixtures");
   const profile = path.join(parent, `packaged-smoke-${randomUUID()}`);
   await fs.mkdir(profile, { recursive: true });
@@ -21,9 +23,11 @@ async function main() {
   let nextId = 0;
   const pending = new Map();
   let timedOut = false;
+  let rejectPause;
   const limit = setTimeout(() => {
     timedOut = true;
     child.kill();
+    rejectPause?.(new Error("Packaged verification timed out before startup"));
     for (const request of pending.values()) request.reject(new Error("Packaged verification timed out"));
   }, 35000);
   const closed = new Promise((resolve) => child.once("exit", (code, signal) => resolve({ code, signal })));
@@ -40,7 +44,7 @@ async function main() {
     socket = new WebSocket(url);
     await new Promise((resolve, reject) => { socket.addEventListener("open", resolve, { once: true }); socket.addEventListener("error", reject, { once: true }); });
     let paused;
-    const firstPause = new Promise((resolve) => { paused = resolve; });
+    const firstPause = new Promise((resolve, reject) => { paused = resolve; rejectPause = reject; });
     socket.addEventListener("message", ({ data }) => {
       const message = JSON.parse(data);
       if (message.method === "Debugger.paused") paused(message.params.callFrames[0]);
@@ -59,6 +63,7 @@ async function main() {
     await call("Debugger.enable");
     await call("Runtime.runIfWaitingForDebugger");
     const frame = await firstPause;
+    rejectPause = undefined;
     const setup = await call("Debugger.evaluateOnCallFrame", {
       callFrameId: frame.callFrameId,
       expression: `(() => {
@@ -79,6 +84,7 @@ async function main() {
             url: location.href, title: document.title,
             api: Object.keys(window.cleaner || {}),
             settings: await window.cleaner.getSettings(),
+            online: ${online} ? {announcement: await window.cleaner.getAnnouncement(), update: await window.cleaner.checkForUpdates()} : null,
             logos: [...document.images].map(image => ({src: image.getAttribute('src'), loaded: image.complete && image.naturalWidth > 0})),
             css: [...document.styleSheets].map(sheet => sheet.href),
             width: innerWidth, documentWidth: document.documentElement.scrollWidth,
@@ -86,7 +92,7 @@ async function main() {
           }))()\`);
           return {version: electron.app.getVersion(), packaged: electron.app.isPackaged, userData: electron.app.getPath('userData'), appPath: electron.app.getAppPath(), errors, ui};
         };
-        globalThis.__cleanerPackageExit = () => { electron.BrowserWindow.getAllWindows().forEach(window => window.destroy()); electron.app.exit(0); };
+        globalThis.__cleanerPackageExit = () => { setTimeout(() => electron.app.quit(), 1000); return true; };
         return electron.app.isPackaged;
       })()`, returnByValue: true
     });
@@ -117,10 +123,15 @@ async function main() {
     if (version === "1.0.3") {
       for (const name of ["微信旧附件", "软件缓存", "疑似卸载残留"]) assert(result.ui.text.includes(name), `Missing category ${name}`);
     }
+    if (online) {
+      assert.equal(result.ui.online.announcement.content, (await fs.readFile(path.resolve(__dirname, "../announcement.md"), "utf8")).trim());
+      assert.equal(result.ui.online.update.status, "not_available");
+      assert.equal(result.ui.online.update.version, version);
+    }
     delete result.ui.text;
     console.log(JSON.stringify(result, null, 2));
-    // Exiting over the inspector disconnects it before the command reply.
-    socket.send(JSON.stringify({ id: ++nextId, method: "Runtime.evaluate", params: { expression: "globalThis.__cleanerPackageExit()" } }));
+    // Let the inspector detach before Electron shuts down its network services.
+    await call("Runtime.evaluate", { expression: "globalThis.__cleanerPackageExit()" });
     socket.close();
     const exit = await closed;
     assert(!timedOut, "Packaged verification timed out during exit");
