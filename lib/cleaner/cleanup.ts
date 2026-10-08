@@ -2,8 +2,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
+import type { Stats } from "node:fs";
 import type { CleanupRequest, CleanupResult, FileFinding } from "../../types/cleaner";
-import { isProtectedPath } from "../scanner/path-rules";
+import { isAllowedSystemCacheFile, isProtectedChatFile, isProtectedPath, normalizePath } from "../scanner/path-rules";
+import { classifyWechatFile, looksLikeChatStorage } from "../scanner/wechat";
+import { isProtectedSoftwareFile, isSoftwareRunning, matchSoftwareRoot, readSoftwareInventory, softwareCacheRoots, suspectedResidualRoots } from "../scanner/software";
+import { fileQueue, writeJsonAtomically, type SerialQueue } from "../storage/atomic-file";
+import { stageFileTransfer, finishFileTransfer } from "./file-transfer";
+import { hashFile } from "../scanner/hash";
 
 interface QuarantineRecord {
   id: string;
@@ -11,6 +17,9 @@ interface QuarantineRecord {
   quarantinePath: string;
   size: number;
   createdAt: string;
+  modifiedAt?: string;
+  state?: "pending" | "ready" | "quarantined" | "restoring";
+  restoreHash?: string;
 }
 
 interface DirectoryTrashTarget {
@@ -22,6 +31,7 @@ export class CleanupManager {
   private quarantineDir: string;
   private manifestPath: string;
   private trashTempDir: string;
+  private queue: SerialQueue;
   private readonly fileOperationConcurrency = 32;
   private readonly trashBatchSize = 8000;
 
@@ -29,24 +39,50 @@ export class CleanupManager {
     this.quarantineDir = path.join(userDataPath, "quarantine");
     this.manifestPath = path.join(this.quarantineDir, "manifest.json");
     this.trashTempDir = path.join(userDataPath, "trash-batches");
+    this.queue = fileQueue(this.manifestPath);
   }
 
   async cleanup(request: CleanupRequest, findings: FileFinding[], allowPermanentDelete: boolean): Promise<CleanupResult> {
-    const selected = new Set(request.findingIds);
-    const targets = findings.filter((item) => selected.has(item.id) && item.recommendedAction !== "keep" && item.risk !== "danger");
-    const result: CleanupResult = { cleanedFiles: 0, cleanedBytes: 0, failed: [] };
-    const quarantineManifest = request.mode === "quarantine" ? await this.readManifest() : null;
-    const safeTargets: FileFinding[] = [];
+    return this.queue.run(() => this.cleanupCurrent(request, findings, allowPermanentDelete));
+  }
 
-    for (const item of targets) {
+  private async cleanupCurrent(request: CleanupRequest, findings: FileFinding[], allowPermanentDelete: boolean): Promise<CleanupResult> {
+    if (!["trash", "quarantine", "delete"].includes(request.mode)) throw new Error("无效的清理模式");
+    const selected = new Set(request.findingIds);
+    const targets = [...new Map(findings.filter((item) => selected.has(item.id) && item.recommendedAction !== "keep" && item.risk !== "danger").map((item) => [normalizePath(item.path), item])).values()];
+    const result: CleanupResult = { cleanedFiles: 0, cleanedBytes: 0, failed: [] };
+    const safeTargets: FileFinding[] = [];
+    const hasSoftware = targets.some((item) => item.category === "software_residuals" || item.category === "software_cache");
+    const inventory = hasSoftware ? await readSoftwareInventory() : null;
+    const residualRoots = hasSoftware ? await suspectedResidualRoots(inventory) : [];
+
+    await runConcurrent(targets, this.fileOperationConcurrency, async (item) => {
       try {
-        if (isProtectedPath(item.path) && item.category !== "system_cache") {
+        const system = item.category === "system_cache" || item.category === "admin_required";
+        if (system && !isAllowedSystemCacheFile(item.path)) throw new Error("不在允许的系统缓存路径内");
+        if (isProtectedPath(item.path) && !system) {
           throw new Error("受保护目录不允许清理");
+        }
+        if (item.category === "wechat_cache" || item.category === "wechat_attachments") {
+          if (classifyWechatFile(item.path) !== (item.category === "wechat_cache" ? "cache" : "attachment")) throw new Error("微信数据库、配置或未知文件不允许清理");
+        } else if (item.category === "qq_cache") {
+          if (isProtectedChatFile(item.path)) throw new Error("聊天数据文件不允许清理");
+        } else if (!system && looksLikeChatStorage(item.path)) {
+          throw new Error("聊天目录只能通过专用分类清理");
+        }
+        if (item.category === "software_cache" || item.category === "software_residuals") {
+          const root = matchSoftwareRoot(item.path, item.category === "software_residuals" ? residualRoots : softwareCacheRoots());
+          if (!inventory || !root || root.softwareId !== item.softwareId || isProtectedSoftwareFile(item.path)) throw new Error("软件状态已改变或无法确认，请重新扫描");
+          if (isSoftwareRunning(root.softwareId, inventory)) throw new Error("软件正在运行，请退出后重新扫描");
         }
 
         if (request.mode === "delete" && !allowPermanentDelete) {
           throw new Error("永久删除未在设置中启用");
         }
+
+        const stat = await fs.lstat(item.path);
+        if (!stat.isFile() || stat.isSymbolicLink() || normalizePath(await fs.realpath(item.path)) !== normalizePath(item.path)) throw new Error("文件路径已改变或包含链接，请重新扫描");
+        if (stat.size !== item.size || stat.mtime.toISOString() !== item.modifiedAt) throw new Error("文件自扫描后已改变，请重新扫描");
 
         safeTargets.push(item);
       } catch (error) {
@@ -55,18 +91,16 @@ export class CleanupManager {
           reason: error instanceof Error ? error.message : "清理失败"
         });
       }
-    }
+    });
 
     if (request.mode === "trash") {
       await this.moveToTrashInBatches(safeTargets, result);
+    } else if (request.mode === "quarantine") {
+      await this.moveToQuarantine(safeTargets, result);
     } else {
       await runConcurrent(safeTargets, this.fileOperationConcurrency, async (item) => {
         try {
-          if (request.mode === "quarantine") {
-            quarantineManifest!.push(await this.moveToQuarantine(item));
-          } else {
-            await fs.rm(item.path, { force: true, recursive: false });
-          }
+          await fs.rm(item.path, { force: true, recursive: false });
 
           result.cleanedFiles += 1;
           result.cleanedBytes += item.size;
@@ -79,20 +113,46 @@ export class CleanupManager {
       });
     }
 
-    if (quarantineManifest) {
-      await this.writeManifest(quarantineManifest);
-    }
-
     return result;
   }
 
   async restoreFromQuarantine(itemId: string) {
+    return this.queue.run(() => this.restoreCurrent(itemId));
+  }
+
+  private async restoreCurrent(itemId: string) {
     const manifest = await this.readManifest();
     const item = manifest.find((record) => record.id === itemId);
     if (!item) return false;
+    if (normalizePath(path.dirname(item.quarantinePath)) !== normalizePath(this.quarantineDir)) throw new Error("无效的隔离区路径");
+
+    if (await pathExists(item.originalPath)) {
+      // A previous restore may have finished moving bytes but not updating the JSON.
+      if (item.state !== "restoring" || !item.restoreHash || await hashFile(item.originalPath) !== item.restoreHash) throw new Error("恢复目标已存在，为避免覆盖请先移走该文件");
+      const original = await fs.lstat(item.originalPath);
+      if (!original.isFile() || original.isSymbolicLink() || normalizePath(await fs.realpath(item.originalPath)) !== normalizePath(item.originalPath)) throw new Error("恢复目标包含链接");
+      if (await pathExists(item.quarantinePath)) {
+        if (await hashFile(item.quarantinePath) !== item.restoreHash) throw new Error("隔离文件已改变，请保留并人工检查");
+        const expected = await fs.lstat(item.quarantinePath);
+        await finishFileTransfer(item.quarantinePath, expected);
+      }
+      await this.writeManifest(manifest.filter((record) => record.id !== itemId));
+      return true;
+    }
 
     await fs.mkdir(path.dirname(item.originalPath), { recursive: true });
-    await fs.rename(item.quarantinePath, item.originalPath);
+    const stat = await fs.lstat(item.quarantinePath);
+    if (stat.size !== item.size) throw new Error("隔离文件大小已改变，请人工检查");
+    const digest = await hashFile(item.quarantinePath);
+    if (item.restoreHash && item.restoreHash !== digest) throw new Error("隔离文件已改变，请人工检查");
+    item.restoreHash = digest;
+    item.state = "restoring";
+    await this.writeManifest(manifest);
+    const expected = await stageFileTransfer(item.quarantinePath, item.originalPath);
+    if (await hashFile(item.originalPath) !== digest) {
+      throw new Error("恢复校验失败，目标文件与隔离副本均已保留，请人工检查");
+    }
+    await finishFileTransfer(item.quarantinePath, expected);
     await this.writeManifest(manifest.filter((record) => record.id !== itemId));
     return true;
   }
@@ -159,32 +219,59 @@ export class CleanupManager {
     });
   }
 
-  private async moveToQuarantine(item: FileFinding): Promise<QuarantineRecord> {
+  private async moveToQuarantine(items: FileFinding[], result: CleanupResult) {
+    if (!items.length) return;
     await fs.mkdir(this.quarantineDir, { recursive: true });
-    const id = randomUUID();
-    const targetPath = path.join(this.quarantineDir, `${id}-${path.basename(item.path)}`);
-    await fs.rename(item.path, targetPath);
-
-    return {
-      id,
-      originalPath: item.path,
-      quarantinePath: targetPath,
-      size: item.size,
-      createdAt: new Date().toISOString()
-    };
+    const previous = await this.readManifest();
+    const planned: QuarantineRecord[] = items.map((item) => {
+      const id = randomUUID();
+      return { id, originalPath: item.path, quarantinePath: path.join(this.quarantineDir, `${id}-${path.basename(item.path)}`), size: item.size, modifiedAt: item.modifiedAt, createdAt: new Date().toISOString(), state: "pending" };
+    });
+    // Journal the batch before creating copies. Never delete originals before the ready journal.
+    await this.writeManifest([...previous, ...planned]);
+    const staged = new Map<string, Stats>();
+    await runConcurrent(planned, this.fileOperationConcurrency, async (record) => {
+      try {
+        const expected = await stageFileTransfer(record.originalPath, record.quarantinePath);
+        if (expected.size !== record.size || expected.mtime.toISOString() !== record.modifiedAt) {
+          await fs.rm(record.quarantinePath, { force: true });
+          throw new Error("文件自扫描后已改变，原文件已保留");
+        }
+        staged.set(record.id, expected);
+        record.state = "ready";
+      } catch (error) {
+        result.failed.push({ path: record.originalPath, reason: error instanceof Error ? error.message : "隔离失败，原文件已保留" });
+      }
+    });
+    const recoverable: QuarantineRecord[] = [];
+    for (const record of planned) if (await pathExists(record.quarantinePath)) recoverable.push(record);
+    await this.writeManifest([...previous, ...recoverable]);
+    await runConcurrent(recoverable, this.fileOperationConcurrency, async (record) => {
+      const expected = staged.get(record.id);
+      if (!expected) return;
+      try {
+        await finishFileTransfer(record.originalPath, expected);
+        record.state = "quarantined";
+        result.cleanedFiles += 1;
+        result.cleanedBytes += record.size;
+      } catch (error) {
+        result.failed.push({ path: record.originalPath, reason: error instanceof Error ? error.message : "移除原文件失败，隔离副本已保留" });
+      }
+    });
+    await this.writeManifest([...previous, ...recoverable]);
   }
 
   private async readManifest(): Promise<QuarantineRecord[]> {
     try {
       return JSON.parse(await fs.readFile(this.manifestPath, "utf8")) as QuarantineRecord[];
-    } catch {
-      return [];
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
     }
   }
 
   private async writeManifest(records: QuarantineRecord[]) {
-    await fs.mkdir(this.quarantineDir, { recursive: true });
-    await fs.writeFile(this.manifestPath, JSON.stringify(records, null, 2), "utf8");
+    await writeJsonAtomically(this.manifestPath, records);
   }
 }
 

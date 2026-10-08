@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Image from "next/image";
 import type { ChangeEvent, ElementType } from "react";
+import { isDefaultSelectedFinding, isSelectableFinding } from "@/lib/selection";
 import {
   AlertTriangle,
   ArchiveRestore,
@@ -42,8 +44,11 @@ const categoryMeta: Record<ScanCategory, { label: string; short: string; icon: E
   system_cache: { label: "系统缓存", short: "系统", icon: Database, description: "Windows 临时文件、日志、WER、.NET 和 VS 缓存" },
   admin_required: { label: "需管理员权限", short: "提权", icon: ShieldAlert, description: "Windows 目录下的日志和缓存，清理前请以管理员身份运行" },
   browser_cache: { label: "浏览器缓存", short: "浏览器", icon: Globe2, description: "Chrome、Edge、Firefox 等缓存和 GPU 缓存" },
-  wechat_cache: { label: "微信缓存", short: "微信", icon: MessageCircle, description: "图片、视频、日志和过期聊天附件" },
+  wechat_cache: { label: "微信缓存", short: "微信", icon: MessageCircle, description: "新版/旧版微信的过期缓存、临时文件和日志" },
+  wechat_attachments: { label: "微信旧附件", short: "附件", icon: Files, description: "旧图片、视频和附件，默认不选中，请人工复核" },
   qq_cache: { label: "QQ 缓存", short: "QQ", icon: MessageCircle, description: "Tencent Files 中的缓存和过期附件" },
+  software_cache: { label: "软件缓存", short: "软件", icon: Database, description: "常见软件及开发工具缓存，默认不选中" },
+  software_residuals: { label: "疑似卸载残留", short: "残留", icon: Eraser, description: "未发现安装/运行证据的软件缓存和日志，需复核" },
   duplicates: { label: "重复文件", short: "重复", icon: Files, description: "按大小与哈希识别相同内容" },
   expired_files: { label: "过期文件", short: "过期", icon: FileClock, description: "长期未修改的用户文件" },
   large_files: { label: "大文件", short: "大文件", icon: HardDrive, description: "超过阈值的文件，适合人工复核" }
@@ -51,7 +56,7 @@ const categoryMeta: Record<ScanCategory, { label: string; short: string; icon: E
 
 const categoryOrder = Object.keys(categoryMeta) as ScanCategory[];
 const defaultTargets: ScanTarget[] = categoryOrder.map((category) => ({ category }));
-const appVersion = "1.0.2";
+const appVersion = "1.0.3";
 
 const fallbackSettings: CleanerSettings = {
   expiredDays: 180,
@@ -59,6 +64,7 @@ const fallbackSettings: CleanerSettings = {
   largeFileSizeMb: 100,
   cleanupMode: "trash",
   customScanPaths: [],
+  wechatScanPaths: [],
   allowPermanentDelete: false
 };
 
@@ -120,7 +126,7 @@ export default function Home() {
     return () => window.clearInterval(timer);
   }, [progress?.scanId, progress?.status]);
 
-  const findings = summary?.findings ?? [];
+  const findings = useMemo(() => summary?.findings ?? [], [summary]);
   const selectedItems = findings.filter((item) => selected.has(item.id));
   const selectedBytes = selectedItems.reduce((sum, item) => sum + item.size, 0);
   const safeBytes = findings.filter((item) => item.recommendedAction === "delete" && item.risk === "safe").reduce((sum, item) => sum + item.size, 0);
@@ -262,7 +268,7 @@ export default function Home() {
         <aside className="rounded-[8px] border border-[#dfe7e2] bg-white/88 p-3 shadow-sm backdrop-blur">
           <div className="mb-5 flex items-center gap-3 px-2 py-2">
             <div className="grid h-10 w-10 overflow-hidden rounded-[8px] bg-[#15806f]">
-              <img src="./logo.png" alt="轻净清理" className="h-full w-full object-cover" />
+              <Image src="./logo.png" alt="轻净清理" width={40} height={40} unoptimized className="h-full w-full object-cover" />
             </div>
             <div>
               <h1 className="text-lg font-semibold">轻净清理</h1>
@@ -315,7 +321,7 @@ export default function Home() {
                   <Settings size={17} />
                   设置
                 </button>
-                <button className="primary-button" disabled={isScanning} onClick={startScan}>
+                <button className="primary-button" disabled={isScanning || isCleaning} onClick={startScan}>
                   {isScanning ? <Loader2 className="animate-spin" size={18} /> : <RefreshCw size={18} />}
                   {isScanning ? "扫描中" : "开始扫描"}
                 </button>
@@ -394,6 +400,8 @@ export default function Home() {
           selectedBytes={selectedBytes}
           selectedCount={selected.size}
           adminCount={selectedItems.filter((item) => item.requiresAdmin).length}
+          attachmentCount={selectedItems.filter((item) => item.category === "wechat_attachments").length}
+          residualCount={selectedItems.filter((item) => item.category === "software_residuals").length}
           onCancel={() => setShowConfirm(false)}
           onConfirm={cleanup}
         />
@@ -490,6 +498,11 @@ function CategoryDetailPage({
       {activeCategory === "admin_required" && (
         <div className="border-b border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
           该分类位于 Windows 受保护目录下，清理时通常需要管理员权限。请右键以管理员身份运行轻净清理后再勾选并执行清理。
+        </div>
+      )}
+      {["wechat_attachments", "software_residuals", "software_cache"].includes(activeCategory) && (
+        <div className="border-b border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
+          {activeCategory === "wechat_attachments" ? "这些是聊天中的实际图片、视频和附件，清理后可能无法再从聊天中打开。默认不选中，请确认已备份或不再需要，并先退出微信。" : activeCategory === "software_residuals" ? "仅扫描已支持软件的缓存/日志；缺少安装记录不能证明已经卸载，便携版也可能仍在使用。默认不选中，请核对路径与软件名称。" : "缓存清理后可能需要重新下载或重建。默认不选中，请先退出对应软件，再选择需要清理的项目。"}
         </div>
       )}
 
@@ -707,6 +720,18 @@ function ProgressPanel({ progress, summary }: { progress: ScanProgress | null; s
           <Metric label="发现容量" value={formatBytes(progress?.foundBytes ?? summary?.totalBytes ?? 0)} />
         </div>
       </div>
+      {summary?.wechatRoots && summary.wechatRoots.length > 0 && (
+        <details className="mt-3 min-w-0 text-xs text-[#66736d]">
+          <summary className="cursor-pointer">已检测微信存储目录（{summary.wechatRoots.length}）</summary>
+          {summary.wechatRoots.map((root) => <p key={root} className="mt-1 truncate" title={root}>{root}</p>)}
+        </details>
+      )}
+      {!!summary?.warnings?.length && (
+        <details className="mt-3 min-w-0 text-sm text-amber-800" open>
+          <summary className="cursor-pointer">扫描提示（{summary.warnings.length}）</summary>
+          <div className="max-h-32 overflow-auto">{summary.warnings.map((warning, index) => <p key={index} className="mt-1 break-all text-xs">{warning}</p>)}</div>
+        </details>
+      )}
     </section>
   );
 }
@@ -721,12 +746,15 @@ function OverviewHint() {
 }
 
 function SettingsPanel({ settings, onChange }: { settings: CleanerSettings; onChange: (settings: Partial<CleanerSettings>) => void }) {
+  const savedWechatPaths = (settings.wechatScanPaths ?? []).join("\n");
+  const [wechatPathDraft, setWechatPathDraft] = useState(savedWechatPaths);
+  useEffect(() => setWechatPathDraft(savedWechatPaths), [savedWechatPaths]);
   return (
     <section className="rounded-[8px] border border-[#dfe7e2] bg-white p-4 shadow-sm">
       <h3 className="mb-3 font-semibold">设置</h3>
       <div className="grid gap-4 md:grid-cols-2">
         <LabeledInput label="过期文件天数" value={settings.expiredDays} onChange={(value) => onChange({ expiredDays: value })} />
-        <LabeledInput label="聊天缓存天数" value={settings.chatExpiredDays} onChange={(value) => onChange({ chatExpiredDays: value })} />
+        <LabeledInput label="聊天缓存与附件天数" value={settings.chatExpiredDays} onChange={(value) => onChange({ chatExpiredDays: value })} />
         <LabeledInput label="大文件阈值 MB" value={settings.largeFileSizeMb} onChange={(value) => onChange({ largeFileSizeMb: value })} />
         <label className="block">
           <span className="mb-1 block text-sm text-[#66736d]">清理模式</span>
@@ -739,6 +767,11 @@ function SettingsPanel({ settings, onChange }: { settings: CleanerSettings; onCh
         <label className="flex items-center justify-between gap-3 rounded-[8px] bg-[#f6faf8] px-3 py-2 md:col-span-2">
           <span className="text-sm text-[#4d5b55]">启用永久删除</span>
           <input type="checkbox" checked={settings.allowPermanentDelete} onChange={(event) => onChange({ allowPermanentDelete: event.target.checked })} />
+        </label>
+        <label className="block min-w-0 md:col-span-2">
+          <span className="mb-1 block text-sm text-[#66736d]">微信存储路径（可选，每行一个）</span>
+          <textarea className="min-h-24 w-full rounded-[8px] border border-[#dfe7e2] px-3 py-2 text-sm outline-none focus:border-[#15806f]" value={wechatPathDraft} onChange={(event) => setWechatPathDraft(event.target.value)} placeholder={"例如 D:\\微信数据 或 D:\\微信数据\\xwechat_files"} onBlur={(event) => onChange({ wechatScanPaths: event.target.value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean) })} />
+          <p className="mt-1 text-xs leading-5 text-[#66736d]">自动识别默认、新版、重定向文档和旧版配置路径。漏扫时可从微信「设置 → 文件管理/存储位置」复制路径；离开输入框后保存，下次扫描生效。</p>
         </label>
       </div>
     </section>
@@ -754,7 +787,7 @@ function LabeledInput({ label, value, onChange }: { label: string; value: number
   );
 }
 
-function ConfirmDialog({ adminCount, isCleaning, mode, onCancel, onConfirm, selectedBytes, selectedCount }: { adminCount: number; isCleaning: boolean; mode: CleanupRequest["mode"]; onCancel: () => void; onConfirm: () => void; selectedBytes: number; selectedCount: number }) {
+function ConfirmDialog({ adminCount, attachmentCount, residualCount, isCleaning, mode, onCancel, onConfirm, selectedBytes, selectedCount }: { adminCount: number; attachmentCount: number; residualCount: number; isCleaning: boolean; mode: CleanupRequest["mode"]; onCancel: () => void; onConfirm: () => void; selectedBytes: number; selectedCount: number }) {
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-[#17201c]/35 p-4 backdrop-blur-sm">
       <div className="w-full max-w-[520px] rounded-[8px] border border-[#dfe7e2] bg-white p-5 shadow-xl">
@@ -775,6 +808,8 @@ function ConfirmDialog({ adminCount, isCleaning, mode, onCancel, onConfirm, sele
             已选择 {adminCount} 项需要管理员权限的系统文件。若清理失败，请右键以管理员身份运行轻净清理后再执行。
           </div>
         )}
+        {attachmentCount > 0 && <p className="mt-3 rounded-[8px] bg-amber-50 p-3 text-sm text-amber-900">已选 {attachmentCount} 项微信原始附件，清理后聊天中的对应图片、视频和文件可能无法打开。请先退出微信并确认不再需要。</p>}
+        {residualCount > 0 && <p className="mt-3 rounded-[8px] bg-amber-50 p-3 text-sm text-amber-900">已选 {residualCount} 项疑似卸载残留。请确认对应软件已不再使用；清理前会再次核对软件状态。</p>}
         <div className="mt-5 flex justify-end gap-2">
           <button className="secondary-button" onClick={onCancel}>取消</button>
           <button className="danger-button" disabled={isCleaning} onClick={onConfirm}>
@@ -809,7 +844,7 @@ function AboutDialog({ onClose }: { onClose: () => void }) {
     <div className="fixed inset-0 z-50 grid place-items-center bg-[#17201c]/35 p-4 backdrop-blur-sm">
       <div className="w-full max-w-[420px] rounded-[8px] border border-[#dfe7e2] bg-white p-6 text-center shadow-xl">
         <div className="mx-auto mb-4 grid h-28 w-28 overflow-hidden rounded-[8px] bg-[#15806f]">
-          <img src="./logo.png" alt="轻净清理 Logo" className="h-full w-full object-cover" />
+          <Image src="./logo.png" alt="轻净清理 Logo" width={112} height={112} unoptimized className="h-full w-full object-cover" />
         </div>
         <h3 className="text-xl font-semibold">轻净清理</h3>
         <p className="mt-1 text-sm text-[#66736d]">版本号 {appVersion}</p>
@@ -866,14 +901,6 @@ function actionLabel(action: FileFinding["recommendedAction"]) {
   if (action === "delete") return "建议清理";
   if (action === "keep") return "建议保留";
   return "人工复核";
-}
-
-function isSelectableFinding(item: FileFinding) {
-  return item.recommendedAction !== "keep" && item.risk !== "danger";
-}
-
-function isDefaultSelectedFinding(item: FileFinding) {
-  return isSelectableFinding(item) && !item.requiresAdmin;
 }
 
 function confirmAdminSelection() {

@@ -3,7 +3,10 @@ export type ScanCategory =
   | "admin_required"
   | "browser_cache"
   | "wechat_cache"
+  | "wechat_attachments"
   | "qq_cache"
+  | "software_cache"
+  | "software_residuals"
   | "duplicates"
   | "expired_files"
   | "large_files";
@@ -28,6 +31,7 @@ export interface FileFinding {
   reason: string;
   duplicateGroupId?: string;
   requiresAdmin?: boolean;
+  softwareId?: string;
   recommendedAction: "delete" | "keep" | "review";
 }
 
@@ -38,6 +42,8 @@ export interface ScanSummary {
   findings: FileFinding[];
   startedAt: string;
   finishedAt?: string;
+  warnings?: string[];
+  wechatRoots?: string[];
 }
 
 export interface ScanStartResult {
@@ -99,6 +105,7 @@ export interface CleanerSettings {
   largeFileSizeMb: number;
   cleanupMode: CleanupRequest["mode"];
   customScanPaths: string[];
+  wechatScanPaths: string[];
   allowPermanentDelete: boolean;
 }
 

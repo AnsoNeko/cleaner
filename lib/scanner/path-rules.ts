@@ -2,10 +2,10 @@ import os from "node:os";
 import path from "node:path";
 
 const protectedRoots = [
-  "C:\\Windows",
-  "C:\\Program Files",
-  "C:\\Program Files (x86)",
-  "C:\\ProgramData"
+  process.env.SystemRoot ?? "C:\\Windows",
+  process.env.ProgramFiles ?? "C:\\Program Files",
+  process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)",
+  process.env.PROGRAMDATA ?? "C:\\ProgramData"
 ].map(normalizePath);
 
 const protectedExtensions = new Set([
@@ -71,10 +71,18 @@ export function isProtectedPath(value: string) {
 
 export function requiresAdminForCleanup(value: string) {
   const normalized = normalizePath(value);
-  return (
-    normalized.startsWith("c:\\windows\\") ||
-    normalized.startsWith("c:\\programdata\\")
-  );
+  return [process.env.SystemRoot ?? "C:\\Windows", process.env.PROGRAMDATA ?? "C:\\ProgramData"]
+    .some((root) => normalized.startsWith(`${normalizePath(root)}\\`));
+}
+
+export function isWithinPath(value: string, root: string) {
+  const candidate = normalizePath(value);
+  const base = normalizePath(root);
+  return candidate === base || candidate.startsWith(`${base}\\`);
+}
+
+export function isAllowedSystemCacheFile(value: string) {
+  return systemCachePaths().some((root) => isWithinPath(value, root)) && looksLikeCacheFile(value);
 }
 
 export function isProtectedChatFile(value: string) {
@@ -92,13 +100,10 @@ export function isProtectedChatFile(value: string) {
 
 export function looksLikeCacheFile(value: string) {
   const ext = path.extname(value).toLowerCase();
-  const lower = value.toLowerCase();
+  const segments = normalizePath(value).split("\\").slice(0, -1);
   return (
     cacheExtensions.has(ext) ||
-    lower.includes("cache") ||
-    lower.includes("temp") ||
-    lower.includes("thumb") ||
-    lower.includes("log")
+    segments.some((segment) => ["cache", "temp", "tmp", "logs", "log", "thumbnails", "temporary asp.net files", "inetcache", "d3dscache", "v3-cache", "plugins-cache"].includes(segment))
   );
 }
 
@@ -140,15 +145,16 @@ export function existingUserPaths(customPaths: string[] = []) {
 
 export function systemCachePaths() {
   const env = process.env;
+  const windows = env.SystemRoot ?? "C:\\Windows";
   return uniquePaths([
     env.TEMP,
     env.TMP,
     env.LOCALAPPDATA ? path.join(env.LOCALAPPDATA, "Temp") : undefined,
-    "C:\\Windows\\Temp",
-    "C:\\Windows\\Logs",
-    "C:\\Windows\\LiveKernelReports",
-    "C:\\Windows\\Microsoft.NET\\Framework\\v4.0.30319\\Temporary ASP.NET Files",
-    "C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\Temporary ASP.NET Files",
+    path.join(windows, "Temp"),
+    path.join(windows, "Logs"),
+    path.join(windows, "LiveKernelReports"),
+    path.join(windows, "Microsoft.NET", "Framework", "v4.0.30319", "Temporary ASP.NET Files"),
+    path.join(windows, "Microsoft.NET", "Framework64", "v4.0.30319", "Temporary ASP.NET Files"),
     env.PROGRAMDATA ? path.join(env.PROGRAMDATA, "Microsoft", "Windows", "WER") : undefined,
     env.LOCALAPPDATA ? path.join(env.LOCALAPPDATA, "Microsoft", "Windows", "INetCache") : undefined,
     env.LOCALAPPDATA ? path.join(env.LOCALAPPDATA, "Microsoft", "Windows", "Explorer") : undefined,
@@ -224,7 +230,9 @@ export function chatCachePaths(kind: "wechat" | "qq") {
 
   return [
     path.join(documents, "Tencent Files"),
-    env.APPDATA ? path.join(env.APPDATA, "Tencent") : undefined,
-    env.LOCALAPPDATA ? path.join(env.LOCALAPPDATA, "Tencent") : undefined
+    env.APPDATA ? path.join(env.APPDATA, "Tencent", "QQ") : undefined,
+    env.APPDATA ? path.join(env.APPDATA, "Tencent", "QQNT") : undefined,
+    env.LOCALAPPDATA ? path.join(env.LOCALAPPDATA, "Tencent", "QQ") : undefined,
+    env.LOCALAPPDATA ? path.join(env.LOCALAPPDATA, "Tencent", "QQNT") : undefined
   ].filter(Boolean) as string[];
 }

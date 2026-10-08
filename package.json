@@ -1,6 +1,6 @@
 {
   "name": "windows-cleaner",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "private": true,
   "license": "MIT",
   "author": "安索 <ansuo1557@qq.com>",
@@ -9,9 +9,10 @@
   "scripts": {
     "dev": "concurrently -k \"next dev\" \"tsc -p tsconfig.electron.json --watch\" \"wait-on http://localhost:3000 dist-electron/electron/main.js && cross-env ELECTRON_START_URL=http://localhost:3000 electron .\"",
     "build": "next build && tsc -p tsconfig.electron.json",
-    "lint": "next lint",
+    "lint": "eslint . --max-warnings=0",
     "package": "npm run build && electron-builder --win",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsc -p tsconfig.electron.json && node --test tests/*.test.cjs"
   },
   "dependencies": {
     "@tailwindcss/postcss": "^4.1.8",
@@ -25,6 +26,7 @@
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
+    "@eslint/eslintrc": "^3.3.1",
     "@types/node": "^22.10.2",
     "@types/react": "^19.0.1",
     "@types/react-dom": "^19.0.2",

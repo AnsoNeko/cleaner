@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import type { Dirent } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { CleanerSettings, FileFinding, ScanCategory, ScanProgress, ScanSummary, ScanTarget } from "../../types/cleaner";
@@ -10,12 +9,15 @@ import {
   existingUserPaths,
   isProtectedChatFile,
   isProtectedPath,
+  isAllowedSystemCacheFile,
+  normalizePath,
   isUserContentFile,
   looksLikeBrowserCacheFile,
-  looksLikeCacheFile,
   requiresAdminForCleanup,
   systemCachePaths
 } from "./path-rules";
+import { classifyWechatFile, discoverWechatRoots, isPrivateWechatDirectory, looksLikeChatStorage } from "./wechat";
+import { isProtectedSoftwareFile, matchSoftwareRoot, readSoftwareInventory, softwareCacheRoots, suspectedResidualRoots, type SoftwareRoot } from "./software";
 
 interface FileCandidate {
   path: string;
@@ -29,9 +31,13 @@ interface ScanTask {
   progress: ScanProgress;
   summary?: ScanSummary;
   promise: Promise<ScanSummary>;
+  warnings: string[];
+  wechatRoots: string[];
+  residualRoots: SoftwareRoot[];
+  softwareRoots: SoftwareRoot[];
+  wechatCandidates?: FileCandidate[];
 }
 
-const maxFilesPerRoot = 12000;
 const yieldEveryFiles = 150;
 
 export class ScanManager {
@@ -51,6 +57,10 @@ export class ScanManager {
 
     const task: ScanTask = {
       cancelled: false,
+      warnings: [],
+      wechatRoots: [],
+      residualRoots: [],
+      softwareRoots: softwareCacheRoots(),
       progress,
       promise: Promise.resolve(null as never)
     };
@@ -89,18 +99,41 @@ export class ScanManager {
     const findings: FileFinding[] = [];
 
     try {
+      task.wechatRoots = await discoverWechatRoots(settings.wechatScanPaths ?? []);
+      if (targets.some((target) => target.category.startsWith("wechat")) && !task.wechatRoots.length) {
+        task.warnings.push("未找到微信存储目录，请在设置中填写微信文件管理显示的路径后重新扫描。");
+      }
+      if (targets.some((target) => target.category === "software_residuals")) {
+        const inventory = await readSoftwareInventory();
+        task.residualRoots = await suspectedResidualRoots(inventory);
+        if (!inventory) task.warnings.push("无法完整读取软件安装与运行记录，已跳过疑似卸载残留检测。");
+      }
       for (const target of targets) {
         if (task.cancelled) break;
         task.progress.message = `正在扫描 ${categoryLabel(target.category)}`;
         const partial = await this.scanTarget(scanId, target, settings);
-        findings.push(...partial);
+        for (const item of partial) findings.push(item);
+        task.progress.foundFiles = findings.length;
+        task.progress.foundBytes = findings.reduce((sum, item) => sum + item.size, 0);
       }
+
+      // Overlapping roots/categories must never count or delete a file twice.
+      const unique = new Map<string, FileFinding>();
+      for (const item of findings) {
+        const key = normalizePath(item.path);
+        const previous = unique.get(key);
+        if (!previous || (item.risk === "review" && previous.risk === "safe") || item.category === "software_residuals") unique.set(key, item);
+      }
+      const uniqueFindings = [...unique.values()];
+      task.wechatCandidates = undefined;
 
       const summary: ScanSummary = {
         scanId,
-        totalFiles: findings.length,
-        totalBytes: findings.reduce((sum, item) => sum + item.size, 0),
-        findings,
+        totalFiles: uniqueFindings.length,
+        totalBytes: uniqueFindings.reduce((sum, item) => sum + item.size, 0),
+        findings: uniqueFindings,
+        warnings: task.warnings,
+        wechatRoots: task.wechatRoots,
         startedAt,
         finishedAt: new Date().toISOString()
       };
@@ -123,29 +156,46 @@ export class ScanManager {
       return this.scanDuplicates(scanId, target.paths ?? existingUserPaths(settings.customScanPaths));
     }
 
-    const roots = this.rootsForTarget(target, settings);
-    const candidates: FileCandidate[] = [];
-
-    for (const root of roots) {
-      candidates.push(
-        ...(await this.walk(root, scanId, {
+    const task = this.tasks.get(scanId)!;
+    const roots = this.rootsForTarget(target, settings, task);
+    const reuseWechat = target.category.startsWith("wechat") && !target.paths?.length;
+    const cached = reuseWechat ? task.wechatCandidates : undefined;
+    if (reuseWechat && !cached) task.wechatCandidates = [];
+    const findings: FileFinding[] = [];
+    const consume = (file: FileCandidate) => {
+      const item = this.toFinding(file, target.category, target, settings, task);
+      if (item) {
+        findings.push(item);
+        task.progress.foundFiles += 1;
+        task.progress.foundBytes += item.size;
+      }
+    };
+    if (cached) {
+      for (const [index, file] of cached.entries()) {
+        if (task.cancelled) break;
+        consume(file);
+        if (index % yieldEveryFiles === 0) await yieldToEventLoop();
+      }
+    } else for (const root of roots) {
+      for await (const file of this.walk(root, scanId, {
           allowProtectedRoot: target.category === "system_cache" || target.category === "admin_required",
-          maxFiles: maxFilesPerRoot
-        }))
-      );
+          category: target.category
+      })) {
+        if (reuseWechat) task.wechatCandidates!.push(file);
+        consume(file);
+      }
     }
-
-    return candidates
-      .map((file) => this.toFinding(file, target.category, target, settings))
-      .filter((item): item is FileFinding => Boolean(item));
+    return findings;
   }
 
-  private rootsForTarget(target: ScanTarget, settings: CleanerSettings) {
+  private rootsForTarget(target: ScanTarget, settings: CleanerSettings, task: ScanTask) {
     if (target.paths?.length) return target.paths;
-    if (target.category === "system_cache" || target.category === "admin_required") return systemCachePaths();
+    if (target.category === "system_cache" || target.category === "admin_required") return systemCachePaths().filter((root) => requiresAdminForCleanup(root) === (target.category === "admin_required"));
     if (target.category === "browser_cache") return browserCachePaths();
-    if (target.category === "wechat_cache") return chatCachePaths("wechat");
+    if (target.category === "wechat_cache" || target.category === "wechat_attachments") return task.wechatRoots;
     if (target.category === "qq_cache") return chatCachePaths("qq");
+    if (target.category === "software_cache") return task.softwareRoots.filter((root) => !matchSoftwareRoot(root.path, task.residualRoots)).map((root) => root.path);
+    if (target.category === "software_residuals") return task.residualRoots.map((root) => root.path);
     return existingUserPaths(settings.customScanPaths);
   }
 
@@ -154,12 +204,14 @@ export class ScanManager {
     const task = this.tasks.get(scanId);
 
     for (const root of roots) {
-      files.push(...(await this.walk(root, scanId, { allowProtectedRoot: false, maxFiles: maxFilesPerRoot })));
+      for await (const file of this.walk(root, scanId, { allowProtectedRoot: false, category: "duplicates" })) files.push(file);
     }
 
     const bySize = new Map<number, FileCandidate[]>();
-    for (const file of files.filter((item) => item.size > 0)) {
-      bySize.set(file.size, [...(bySize.get(file.size) ?? []), file]);
+    for (const file of [...new Map(files.map((item) => [normalizePath(item.path), item])).values()].filter((item) => item.size > 0)) {
+      const group = bySize.get(file.size);
+      if (group) group.push(file);
+      else bySize.set(file.size, [file]);
     }
 
     const findings: FileFinding[] = [];
@@ -210,7 +262,9 @@ export class ScanManager {
       try {
         task!.progress.currentPath = file.path;
         const digest = await hashFile(file.path, bytes);
-        groups.set(digest, [...(groups.get(digest) ?? []), file]);
+        const group = groups.get(digest);
+        if (group) group.push(file);
+        else groups.set(digest, [file]);
       } catch {
         continue;
       }
@@ -224,7 +278,8 @@ export class ScanManager {
     file: FileCandidate,
     category: ScanCategory,
     target: ScanTarget,
-    settings: CleanerSettings
+    settings: CleanerSettings,
+    task: ScanTask
   ): FileFinding | null {
     const ageMs = Date.now() - file.modifiedAt.getTime();
     const ageDays = ageMs / 1000 / 60 / 60 / 24;
@@ -234,15 +289,17 @@ export class ScanManager {
     if (category === "expired_files" && ageDays < (target.maxAgeDays ?? settings.expiredDays)) return null;
     if (category === "expired_files" && !isUserContentFile(file.path)) return null;
 
-    if ((category === "wechat_cache" || category === "qq_cache") && isProtectedChatFile(file.path)) {
+    const wechat = category === "wechat_cache" || category === "wechat_attachments";
+    if (wechat && classifyWechatFile(file.path) !== (category === "wechat_cache" ? "cache" : "attachment")) return null;
+    if (category === "qq_cache" && isProtectedChatFile(file.path)) {
       return null;
     }
 
-    if ((category === "wechat_cache" || category === "qq_cache") && ageDays < (target.maxAgeDays ?? settings.chatExpiredDays)) {
+    if ((wechat || category === "qq_cache") && ageDays < (target.maxAgeDays ?? settings.chatExpiredDays)) {
       return null;
     }
 
-    if ((category === "system_cache" || category === "admin_required") && !looksLikeCacheFile(file.path)) {
+    if ((category === "system_cache" || category === "admin_required") && !isAllowedSystemCacheFile(file.path)) {
       return null;
     }
 
@@ -253,10 +310,16 @@ export class ScanManager {
     const requiresAdmin = (category === "system_cache" || category === "admin_required") && requiresAdminForCleanup(file.path);
     if (category === "system_cache" && requiresAdmin) return null;
     if (category === "admin_required" && !requiresAdmin) return null;
-    const reviewOnly = category === "large_files" || category === "expired_files" || requiresAdmin;
+    const software = category === "software_cache" || category === "software_residuals";
+    const softwareRoot = software ? matchSoftwareRoot(file.path, category === "software_residuals" ? task.residualRoots : task.softwareRoots) : undefined;
+    if (software && (!softwareRoot || isProtectedSoftwareFile(file.path))) return null;
+    const reviewOnly = category === "large_files" || category === "expired_files" || category === "wechat_attachments" || category === "qq_cache" || software || requiresAdmin;
     const safeCache = category === "wechat_cache" || category === "qq_cache" || category === "browser_cache" || category === "system_cache";
 
-    const reason = requiresAdmin ? `需要管理员权限：${reasonFor(category, file, settings)}` : reasonFor(category, file, settings);
+    const detail = softwareRoot
+      ? `${softwareRoot.label}：${category === "software_residuals" ? "未发现安装记录、运行进程及常见程序文件，疑似卸载残留；仅列出缓存/日志，请确认仍需使用的软件" : "缓存/日志，清理后可能需要重新下载或重建，请先退出软件"}`
+      : reasonFor(category, file, settings, target);
+    const reason = requiresAdmin ? `需要管理员权限：${detail}` : detail;
 
     return {
       id: randomUUID(),
@@ -268,72 +331,84 @@ export class ScanManager {
       risk: reviewOnly ? "review" : "safe",
       reason,
       requiresAdmin,
+      softwareId: softwareRoot?.softwareId,
       recommendedAction: reviewOnly ? "review" : safeCache ? "delete" : "review"
     };
   }
 
-  private async walk(root: string, scanId: string, options: { allowProtectedRoot: boolean; maxFiles: number }) {
+  private async *walk(root: string, scanId: string, options: { allowProtectedRoot: boolean; category: ScanCategory }): AsyncGenerator<FileCandidate> {
     const task = this.tasks.get(scanId);
-    if (!task) return [];
+    if (!task) return;
 
-    const output: FileCandidate[] = [];
     const normalizedRoot = path.resolve(root);
-    if (!options.allowProtectedRoot && isProtectedPath(normalizedRoot)) return output;
+    if (!options.allowProtectedRoot && isProtectedPath(normalizedRoot)) return;
+    const generic = ["duplicates", "expired_files", "large_files"].includes(options.category);
+    const normalizedChatRoots = task.wechatRoots.map(normalizePath);
+    const skipGeneric = (value: string) => {
+      if (!generic) return false;
+      const normalized = normalizePath(value);
+      return looksLikeChatStorage(value) || normalizedChatRoots.some((chatRoot) => normalized === chatRoot || normalized.startsWith(`${chatRoot}\\`)) || Boolean(matchSoftwareRoot(value, task.softwareRoots));
+    };
+    if (skipGeneric(normalizedRoot)) return;
 
     try {
-      const stat = await fs.stat(normalizedRoot);
-      if (!stat.isDirectory()) return output;
-    } catch {
-      return output;
+      const stat = await fs.lstat(normalizedRoot);
+      if (!stat.isDirectory() || stat.isSymbolicLink() || normalizePath(await fs.realpath(normalizedRoot)) !== normalizePath(normalizedRoot)) return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") task.warnings.push(`目录无法读取：${normalizedRoot}`);
+      return;
     }
 
     const stack = [normalizedRoot];
-    while (stack.length && !task.cancelled && output.length < options.maxFiles) {
+    while (stack.length && !task.cancelled) {
       const current = stack.pop()!;
       task.progress.currentPath = current;
       task.progress.message = "正在扫描文件";
 
-      let entries: Dirent[];
+      let directory;
       try {
-        entries = await fs.readdir(current, { withFileTypes: true });
+        const stat = await fs.lstat(current);
+        if (!stat.isDirectory() || stat.isSymbolicLink() || normalizePath(await fs.realpath(current)) !== normalizePath(current)) continue;
+        directory = await fs.opendir(current, { bufferSize: 128 });
       } catch {
+        task.warnings.push(`目录读取失败，已跳过：${current}`);
         continue;
       }
 
-      for (const entry of entries) {
-        if (task.cancelled || output.length >= options.maxFiles) break;
+      try {
+        for await (const entry of directory) {
+        if (task.cancelled) break;
         const fullPath = path.join(current, entry.name);
         task.progress.scannedFiles += 1;
+        if (task.progress.scannedFiles % yieldEveryFiles === 0) await yieldToEventLoop();
+        if (entry.isSymbolicLink() || skipGeneric(fullPath)) continue;
 
         if (entry.isDirectory()) {
           if (!options.allowProtectedRoot && isProtectedPath(fullPath)) continue;
           if (entry.name.startsWith("$") || entry.name === "node_modules") continue;
+          if (options.category.startsWith("wechat") && isPrivateWechatDirectory(fullPath)) continue;
           stack.push(fullPath);
           continue;
         }
 
         if (!entry.isFile()) continue;
+        if (options.category.startsWith("wechat") && !classifyWechatFile(fullPath)) continue;
         try {
-          const stat = await fs.stat(fullPath);
-          output.push({
+          const stat = await fs.lstat(fullPath);
+          if (!stat.isFile() || stat.isSymbolicLink()) continue;
+          yield {
             path: fullPath,
             size: stat.size,
             modifiedAt: stat.mtime,
             accessedAt: stat.atime
-          });
-          task.progress.foundFiles += 1;
-          task.progress.foundBytes += stat.size;
+          };
         } catch {
           continue;
         }
 
-        if (task.progress.scannedFiles % yieldEveryFiles === 0) {
-          await yieldToEventLoop();
-        }
       }
+      } catch { task.warnings.push(`目录读取失败，结果可能不完整：${current}`); }
     }
-
-    return output;
   }
 }
 
@@ -345,7 +420,7 @@ function chooseDuplicateKeeper(files: FileCandidate[]) {
   })[0];
 }
 
-function reasonFor(category: ScanCategory, file: FileCandidate, settings: CleanerSettings) {
+function reasonFor(category: ScanCategory, file: FileCandidate, settings: CleanerSettings, target: ScanTarget) {
   const sizeMb = Math.max(0.1, file.size / 1024 / 1024).toFixed(1);
     switch (category) {
     case "admin_required":
@@ -355,7 +430,9 @@ function reasonFor(category: ScanCategory, file: FileCandidate, settings: Cleane
     case "browser_cache":
       return "浏览器缓存、GPU 缓存或 Service Worker 缓存";
     case "wechat_cache":
-      return `微信缓存或超过 ${settings.chatExpiredDays} 天的聊天附件`;
+      return `超过 ${target.maxAgeDays ?? settings.chatExpiredDays} 天的微信缓存/临时文件，请先退出微信`;
+    case "wechat_attachments":
+      return `超过 ${target.maxAgeDays ?? settings.chatExpiredDays} 天的微信图片、视频或附件；清理后聊天中的原文件可能无法打开，默认不选中`;
     case "qq_cache":
       return `QQ 缓存或超过 ${settings.chatExpiredDays} 天的聊天附件`;
     case "expired_files":
@@ -377,6 +454,12 @@ function categoryLabel(category: ScanCategory) {
       return "浏览器缓存";
     case "wechat_cache":
       return "微信缓存";
+    case "wechat_attachments":
+      return "微信旧附件";
+    case "software_cache":
+      return "软件缓存";
+    case "software_residuals":
+      return "疑似卸载残留";
     case "qq_cache":
       return "QQ 缓存";
     case "duplicates":

@@ -8,3 +8,6 @@ release
 Thumbs.db
 .env*
 Claude.md
+.test-fixtures/
+.playwright-cli/
+output/playwright/
